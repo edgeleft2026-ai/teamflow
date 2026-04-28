@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from teamflow.config import FeishuConfig
 from teamflow.execution.cli import CLIResult, run_cli
 
@@ -54,6 +56,25 @@ def send_text(
 ) -> CLIResult:
     """Shorthand for sending a plain text message."""
     return send_message(feishu, chat_id=chat_id, user_id=user_id, text=text, **kwargs)
+
+
+def send_card(
+    feishu: FeishuConfig,
+    card: dict,
+    *,
+    chat_id: str | None = None,
+    user_id: str | None = None,
+    **kwargs,
+) -> CLIResult:
+    """Send an interactive card message."""
+    return send_message(
+        feishu,
+        chat_id=chat_id,
+        user_id=user_id,
+        msg_type="interactive",
+        content=json.dumps(card, ensure_ascii=False),
+        **kwargs,
+    )
 
 
 def send_markdown(

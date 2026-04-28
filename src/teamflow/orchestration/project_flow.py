@@ -8,7 +8,8 @@ from sqlmodel import Session
 
 from teamflow.config import FeishuConfig
 from teamflow.core.enums import ActionResult, ProjectStatus
-from teamflow.execution.messages import send_text
+from teamflow.execution.messages import send_card, send_text
+from teamflow.orchestration.card_templates import project_created_card, project_failed_card
 from teamflow.orchestration.event_bus import EventBus
 from teamflow.storage.models import ConversationState
 from teamflow.storage.repository import ActionLogRepo, ConversationStateRepo, ProjectRepo
@@ -176,15 +177,9 @@ class ProjectCreateFlow:
             # 清除会话状态
             self.conv_repo.delete_active(open_id)
 
-            send_text(
+            send_card(
                 self.feishu,
-                (
-                    f"项目创建成功！\n\n"
-                    f"项目ID：{project.id[:8]}\n"
-                    f"项目名：{project_name}\n"
-                    f"仓库：{git_repo_path}\n\n"
-                    f"接下来将自动初始化飞书协作空间..."
-                ),
+                project_created_card(project.id, project_name, git_repo_path),
                 chat_id=chat_id,
             )
 
@@ -207,13 +202,8 @@ class ProjectCreateFlow:
 
             self.conv_repo.delete_active(open_id)
 
-            send_text(
+            send_card(
                 self.feishu,
-                (
-                    f"项目创建失败\n\n"
-                    f"失败步骤：创建项目记录\n"
-                    f"原因：{e}\n\n"
-                    f"你可以重新发送\"开始创建项目\"重试。"
-                ),
+                project_failed_card("创建项目记录", str(e)),
                 chat_id=chat_id,
             )

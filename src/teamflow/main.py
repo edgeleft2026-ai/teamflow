@@ -121,11 +121,12 @@ async def main() -> None:
 
     # Startup self-test: send notification to admin if configured
     if feishu.admin_open_id:
-        from teamflow.execution.messages import send_text
+        from teamflow.execution.messages import send_card
+        from teamflow.orchestration.card_templates import startup_card
 
-        result = send_text(
+        result = send_card(
             feishu,
-            "TeamFlow 已启动，消息通道正常。",
+            startup_card(),
             user_id=feishu.admin_open_id,
         )
         if result.success:

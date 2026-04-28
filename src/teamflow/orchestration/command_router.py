@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 
 from teamflow.config import FeishuConfig
-from teamflow.execution.messages import send_text
+from teamflow.execution.messages import send_card
+from teamflow.orchestration.card_templates import welcome_card
 from teamflow.orchestration.event_bus import EventBus
 from teamflow.orchestration.project_flow import FLOW_NAME, ProjectCreateFlow
 from teamflow.storage.database import get_session
@@ -13,14 +14,6 @@ logger = logging.getLogger(__name__)
 
 _HELP_TRIGGERS = {"/help", "帮助", "help"}
 _CREATE_TRIGGERS = {"开始创建项目", "创建项目", "新建项目", "create project"}
-
-WELCOME_TEXT = (
-    "你好！我是 TeamFlow，你的 AI 项目协作助手。\n\n"
-    "我可以帮你：\n"
-    "• 创建项目 — 发送\"开始创建项目\"\n"
-    "• 查看帮助 — 发送 /help\n"
-    "• 查看项目状态 — 发送 /status（开发中）"
-)
 
 
 class CommandRouter:
@@ -49,8 +42,8 @@ class CommandRouter:
                 return
 
         if stripped in _HELP_TRIGGERS:
-            send_text(self.feishu, WELCOME_TEXT, chat_id=chat_id)
+            send_card(self.feishu, welcome_card(), chat_id=chat_id)
             return
 
         # 无法识别 — 发送引导
-        send_text(self.feishu, WELCOME_TEXT, chat_id=chat_id)
+        send_card(self.feishu, welcome_card(), chat_id=chat_id)
