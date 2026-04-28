@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -44,12 +43,12 @@ class EventFileWatcher:
 
     async def _scan_files(self, callback) -> None:
         for path in sorted(self.watch_dir.rglob("*.ndjson")):
-            await self._read_new_lines(path, callback)
+            await self._read_new_lines(path, callback, multiline=False)
         # Also check for plain json files (route-based output)
         for path in sorted(self.watch_dir.rglob("*.json")):
-            await self._read_new_lines(path, callback)
+            await self._read_new_lines(path, callback, multiline=True)
 
-    async def _read_new_lines(self, path: Path, callback) -> None:
+    async def _read_new_lines(self, path: Path, callback, *, multiline: bool = False) -> None:
         key = str(path)
         try:
             stat = path.stat()
@@ -63,33 +62,44 @@ class EventFileWatcher:
         try:
             with open(path, encoding="utf-8") as f:
                 f.seek(offset)
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        callback(line)
+                if multiline:
+                    content = f.read().strip()
+                    if content:
+                        callback(content)
+                else:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            callback(line)
                 self._file_positions[key] = f.tell()
         except OSError:
             logger.debug("Failed to read event file %s", path)
 
 
 def list_existing_events(watch_dir: Path) -> list[str]:
-    """Read all existing NDJSON lines from the watch directory.
+    """Read all existing events from the watch directory.
 
     Useful for catching up on events that occurred before the watcher started.
     """
     lines: list[str] = []
     for path in sorted(watch_dir.rglob("*.ndjson")):
-        _read_all_lines(path, lines)
+        _read_all_lines(path, lines, multiline=False)
     for path in sorted(watch_dir.rglob("*.json")):
-        _read_all_lines(path, lines)
+        _read_all_lines(path, lines, multiline=True)
     return lines
 
 
-def _read_all_lines(path: Path, lines: list[str]) -> None:
+def _read_all_lines(path: Path, lines: list[str], *, multiline: bool = False) -> None:
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                lines.append(line)
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            return
+        if multiline:
+            lines.append(content)
+        else:
+            for line in content.splitlines():
+                line = line.strip()
+                if line:
+                    lines.append(line)
     except OSError:
         pass

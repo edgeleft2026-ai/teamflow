@@ -11,6 +11,7 @@ class FeishuConfig(BaseModel):
     app_id: str
     app_secret: str
     brand: str = "feishu"
+    admin_open_id: str = ""
 
 
 class TeamFlowConfig(BaseModel):

@@ -5,11 +5,13 @@ import logging
 import os
 import signal
 import subprocess
-import sys
 from pathlib import Path
 
 from teamflow.access import EventDispatcher, EventFileWatcher, FeishuEvent, is_bot_message
+from teamflow.access.parser import extract_chat_id, extract_message_text, extract_open_id
 from teamflow.config import load_config
+from teamflow.orchestration.command_router import CommandRouter
+from teamflow.storage.database import init_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +45,7 @@ def start_event_subscriber(
         "--event-types", event_types or DEFAULT_EVENT_TYPES,
         "--compact",
         "--output-dir", str(output_path),
+        "--force",
     ]
 
     env = dict(os.environ)
@@ -61,25 +64,27 @@ def start_event_subscriber(
     return proc
 
 
-def handle_message_event(event: FeishuEvent) -> None:
-    """Basic handler for im.message.receive_v1 events."""
-    from teamflow.access.parser import extract_chat_id, extract_message_text, extract_open_id
+def handle_message_event(event: FeishuEvent, router: CommandRouter, bot_app_id: str) -> None:
+    """Handle im.message.receive_v1 events: filter bot messages, route to CommandRouter."""
+    if is_bot_message(event, bot_app_id):
+        return
 
     text = extract_message_text(event)
     chat_id = extract_chat_id(event)
     open_id = extract_open_id(event)
 
-    logger.info(
-        "Message received: chat=%s user=%s text=%s",
-        chat_id,
-        open_id,
-        (text or "")[:100],
-    )
+    if not text or not chat_id or not open_id:
+        logger.warning("Incomplete message context, skipping")
+        return
+
+    logger.info("Message received: chat=%s user=%s text=%s", chat_id, open_id, text[:100])
+    router.handle(text=text, open_id=open_id, chat_id=chat_id)
 
 
-async def run_health_server(host: str = "127.0.0.1", port: int = 8080) -> None:
-    """Simple health check server using only stdlib."""
-    from http.server import HTTPServer, BaseHTTPRequestHandler
+async def _start_health_server(host: str = "127.0.0.1", port: int = 8080):
+    """Start health check server in a thread. Returns the HTTPServer instance."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -96,7 +101,9 @@ async def run_health_server(host: str = "127.0.0.1", port: int = 8080) -> None:
             logger.debug("Health server: %s", format % args)
 
     server = HTTPServer((host, port), HealthHandler)
-    server.serve_forever()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
 
 
 async def main() -> None:
@@ -104,6 +111,29 @@ async def main() -> None:
     feishu = config.feishu
 
     logger.info("TeamFlow starting (app_id=%s, brand=%s)", feishu.app_id[:8] + "...", feishu.brand)
+
+    # Initialize database
+    init_db()
+    logger.info("Database initialized")
+
+    # Create command router
+    router = CommandRouter(feishu)
+
+    # Startup self-test: send notification to admin if configured
+    if feishu.admin_open_id:
+        from teamflow.execution.messages import send_text
+
+        result = send_text(
+            feishu,
+            "TeamFlow 已启动，消息通道正常。",
+            user_id=feishu.admin_open_id,
+        )
+        if result.success:
+            logger.info("Startup self-test: message sent to admin OK")
+        else:
+            logger.error("Startup self-test FAILED: %s", result.error)
+    else:
+        logger.warning("admin_open_id not configured, skipping startup self-test")
 
     # Resolve paths
     cli_binary = os.getenv("LARK_CLI_BINARY", "lark-cli")
@@ -121,13 +151,26 @@ async def main() -> None:
     )
     logger.info("Event subscriber started (pid=%d)", subscriber.pid)
 
+    # Wait briefly and check subscriber health
+    await asyncio.sleep(3)
+    if subscriber.poll() is not None:
+        stderr_output = subscriber.stderr.read() if subscriber.stderr else ""
+        logger.error(
+            "Event subscriber crashed immediately (code=%d): %s",
+            subscriber.returncode,
+            stderr_output[:500],
+        )
+        return
+    logger.info("Event subscriber is running")
+
     # Set up event dispatcher
     dispatcher = EventDispatcher()
-    dispatcher.on("im.message.receive_v1", handle_message_event)
+    dispatcher.on("im.message.receive_v1", lambda e: handle_message_event(e, router, feishu.app_id))
 
     # Log all events
     def log_event(event: FeishuEvent) -> None:
-        logger.info("Event: %s (id=%s)", event.event_type, event.event_id[:16] if event.event_id else "?")
+        eid = event.event_id[:16] if event.event_id else "?"
+        logger.info("Event: %s (id=%s)", event.event_type, eid)
 
     dispatcher.on_any(log_event)
 
@@ -136,7 +179,7 @@ async def main() -> None:
 
     # Start health check server
     health_port = int(os.getenv("TEAMFLOW_HEALTH_PORT", "8080"))
-    health_task = asyncio.create_task(run_health_server(port=health_port))
+    health_server = await _start_health_server(port=health_port)
     logger.info("Health check at http://127.0.0.1:%d/health", health_port)
 
     # Shutdown signal
@@ -151,7 +194,11 @@ async def main() -> None:
 
     # Main loop: watch events
     async def watch_loop():
-        await watcher.watch(lambda line: dispatcher.dispatch_raw(line))
+        def on_raw_line(line: str) -> None:
+            logger.info("Watcher read line: %s", line[:120])
+            dispatcher.dispatch_raw(line)
+
+        await watcher.watch(on_raw_line)
 
     watch_task = asyncio.create_task(watch_loop())
 
@@ -175,14 +222,15 @@ async def main() -> None:
         logger.info("Shutting down...")
         watcher.stop()
         watch_task.cancel()
-        health_task.cancel()
+        health_server.shutdown()
         if subscriber.poll() is None:
             subscriber.terminate()
             try:
-                subscriber.wait(timeout=5)
+                subscriber.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 subscriber.kill()
         logger.info("TeamFlow stopped.")
+        os._exit(0)
 
 
 if __name__ == "__main__":

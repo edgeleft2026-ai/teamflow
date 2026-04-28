@@ -56,28 +56,28 @@
 
 目标：用户能在飞书中发起项目创建，完成信息收集、项目落库、管理员绑定和创建结果回执。
 
-- [ ] 欢迎引导消息：首次触达或 `/help` 时展示可用能力
-- [ ] “开始创建项目”触发识别
-- [ ] 分步信息收集状态机
-  - [ ] `idle` -> `collecting_project_name`
-  - [ ] `collecting_project_name` -> `collecting_repo`
-  - [ ] `collecting_repo` -> `creating_project`
-  - [ ] `creating_project` -> `created` / `failed`
-- [ ] 会话状态持久化：保存 open_id、chat_id、flow、state、payload、expires_at
-- [ ] 项目名称收集与校验：非空
-- [ ] Git 仓库地址或本地路径收集与校验：非空
-- [ ] 项目记录写入数据库：id、name、git_repo_path、admin_open_id、status、created_at、updated_at
-- [ ] 管理员绑定：从消息上下文获取 open_id
-- [ ] 创建成功回执：项目 ID、项目名、后续初始化提示
-- [ ] 创建失败回执：失败步骤、原因、可执行下一步
-- [ ] 发布 `project.created` 事件
-- [ ] 事件写入 `EventLog`，包含 idempotency_key
-- [ ] 动作写入 `ActionLog`
-- [ ] 异常处理
-  - [ ] 用户中途退出 -> 提示当前阶段
-  - [ ] 重复触发创建 -> 允许重新开始或覆盖旧流程
-  - [ ] 输入为空 -> 提示重新输入
-  - [ ] 飞书身份解析失败 -> 明确报错并记录日志
+- [x] 欢迎引导消息：首次触达或 `/help` 时展示可用能力
+- [x] “开始创建项目”触发识别
+- [x] 分步信息收集状态机
+  - [x] `idle` -> `collecting_project_name`
+  - [x] `collecting_project_name` -> `collecting_repo`
+  - [x] `collecting_repo` -> `creating_project`
+  - [x] `creating_project` -> `created` / `failed`
+- [x] 会话状态持久化：保存 open_id、chat_id、flow、state、payload、expires_at
+- [x] 项目名称收集与校验：非空
+- [x] Git 仓库地址或本地路径收集与校验：非空
+- [x] 项目记录写入数据库：id、name、git_repo_path、admin_open_id、status、created_at、updated_at
+- [x] 管理员绑定：从消息上下文获取 open_id
+- [x] 创建成功回执：项目 ID、项目名、后续初始化提示
+- [x] 创建失败回执：失败步骤、原因、可执行下一步
+- [x] 发布 `project.created` 事件
+- [x] 事件写入 `EventLog`，包含 idempotency_key
+- [x] 动作写入 `ActionLog`
+- [x] 异常处理
+  - [x] 用户中途退出 -> 提示当前阶段
+  - [x] 重复触发创建 -> 允许重新开始或覆盖旧流程
+  - [x] 输入为空 -> 提示重新输入
+  - [x] 飞书身份解析失败 -> 明确报错并记录日志
 
 验收依据：`docs/prd/modules/01-project-entry-and-onboarding.md`。
 

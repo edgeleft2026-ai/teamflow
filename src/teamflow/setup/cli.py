@@ -10,13 +10,16 @@ import yaml
 from .feishu import probe_bot, qr_register
 
 
-def _save_config(config_path: Path, app_id: str, app_secret: str, brand: str) -> None:
+def _save_config(
+    config_path: Path, app_id: str, app_secret: str, brand: str, admin_open_id: str = "",
+) -> None:
     """Write credentials to config.yaml."""
     config = {
         "feishu": {
             "app_id": app_id,
             "app_secret": app_secret,
             "brand": brand,
+            "admin_open_id": admin_open_id,
         }
     }
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,9 +83,14 @@ def setup(config_path: Path | None = None) -> None:
         print("\n  Starting QR registration...")
         result = qr_register()
         if result:
-            _save_config(config_path, result["app_id"], result["app_secret"], result["domain"])
+            admin_open_id = result.get("open_id", "")
+            _save_config(
+                config_path, result["app_id"], result["app_secret"], result["domain"], admin_open_id,
+            )
+            if admin_open_id:
+                print(f"  Admin open_id: {admin_open_id}")
             print("\n  Setup complete! Run TeamFlow with:")
-            print(f"    python -m teamflow.main")
+            print("    teamflow run")
         else:
             print("\n  QR registration failed.")
             fallback = input("  Try manual setup? [Y/n]: ").strip().lower()

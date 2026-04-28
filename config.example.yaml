@@ -5,3 +5,4 @@ feishu:
   app_id: "cli_xxxxxxxxxxxx"
   app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   brand: "feishu"  # "feishu" for China, "lark" for international
+  admin_open_id: ""  # Optional: your Feishu open_id for startup notification

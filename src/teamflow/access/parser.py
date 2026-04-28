@@ -41,8 +41,8 @@ def parse_ndjson_line(line: str) -> FeishuEvent | None:
     # lark-cli --compact mode flattens the event into a single object.
     # Standard SDK event format has header + event body.
     header = data.get("header", {})
-    event_id = header.get("event_id", data.get("event_id", ""))
-    event_type = header.get("event_type", data.get("event_type", ""))
+    event_id = header.get("event_id", "") or data.get("event_id", "") or data.get("id", "")
+    event_type = header.get("event_type", "") or data.get("event_type", "") or data.get("type", "")
 
     if not event_type:
         return None
@@ -85,6 +85,12 @@ def extract_open_id(event: FeishuEvent) -> str | None:
     """Extract user open_id from a message event."""
     sender = event.body.get("sender", {})
     sender_id = sender.get("sender_id", {})
+    # Compact format: sender_id is a flat string at top level
+    if isinstance(sender_id, str):
+        return sender_id
+    flat_sender_id = event.body.get("sender_id")
+    if isinstance(flat_sender_id, str):
+        return flat_sender_id
     return sender_id.get("open_id") or sender_id.get("user_id")
 
 
@@ -97,9 +103,12 @@ def extract_chat_id(event: FeishuEvent) -> str | None:
 def extract_message_text(event: FeishuEvent) -> str | None:
     """Extract text content from a message event."""
     message = event.body.get("message", {})
-    content_str = message.get("content", "")
+    content_str = message.get("content", "") or event.body.get("content", "")
     if not content_str:
         return None
+    # Compact format: content is plain text
+    if event.body.get("message_type") == "text" and not content_str.startswith("{"):
+        return content_str
     try:
         content = json.loads(content_str)
         return content.get("text", "")
