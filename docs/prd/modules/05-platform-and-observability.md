@@ -86,15 +86,48 @@
 
 ## 6. 执行层要求
 
-执行层需封装对外动作：
+执行层基于 **teamflow-cli**（从 lark-cli 编译的 Go 二进制）实现，Python 主进程通过 subprocess 调用。
 
-1. Feishu CLI 或飞书 SDK 调用。
-2. 数据库读写。
-3. 通知发送。
-4. 文档创建。
-5. 模型调用。
+### 6.1 CLI 集成架构
 
-统一结果格式：
+```text
+Python 主进程
+  → execution 模块构建 CLI 命令和参数
+  → subprocess.run(["teamflow-cli", ...])
+  → 解析 stdout JSON 输出（业务结果）
+  → 解析 stderr 结构化日志（ActionLog）
+  → 返回统一结果格式
+```
+
+### 6.2 CLI 扩展
+
+teamflow-cli 注入两个扩展（通过 Go blank import 机制）：
+
+**Credential Extension**：实现 `credential.Provider` 接口
+- 从 TeamFlow 配置文件或环境变量读取 App ID / App Secret
+- 支持 bot 和 user 两种身份模式
+- 不依赖 CLI 内置的 OAuth 或 sidecar 认证流程
+
+**Transport Extension**：实现 `transport.Provider` + `transport.Interceptor` 接口
+- PreRoundTrip：提取请求 method、path、body hash
+- PostRoundTrip：提取响应 status、body 摘要
+- 自动输出结构化 JSON 日志，格式兼容 ActionLog
+- 业务编排层无需手动记录每个飞书 API 调用的 ActionLog
+
+### 6.3 命令映射
+
+| 业务动作 | CLI 命令 | 说明 |
+|----------|----------|------|
+| 发送消息 | `im +messages-send` | 支持 --chat-id / --user-id、--text / --markdown |
+| 创建群 | `im +chat-create` | 支持 --name、--users、--type |
+| 拉人入群 | `im +chat-members-add` | — |
+| 获取群链接 | `im +chat-link` | — |
+| 创建文档 | `docs +create` | 支持 --title、--content |
+| 订阅事件 | `event +subscribe` | 长驻进程，--output-dir、--route |
+
+### 6.4 统一结果格式
+
+Python 执行层封装 CLI 输出为统一格式：
 
 ```json
 {
@@ -106,13 +139,27 @@
 }
 ```
 
-要求：
+### 6.5 事件订阅
+
+事件订阅是唯一的长驻 CLI 进程：
+
+```bash
+teamflow-cli event +subscribe \
+  --event-types im.message.receive_v1,... \
+  --compact \
+  --output-dir /tmp/teamflow/events \
+  --route '^im\.message=dir:./events/im/'
+```
+
+主进程通过文件监听消费事件，支持进程重启不丢事件。
+
+### 6.6 要求
 
 1. 输入参数明确。
-2. 输出结果结构化。
-3. 失败原因明确。
-4. 敏感信息脱敏。
-5. 每次外部动作写入 `ActionLog`。
+2. 输出结果结构化（JSON）。
+3. 失败原因明确（CLI stderr 包含错误信息）。
+4. 敏感信息脱敏（Transport Extension 在记录日志前脱敏）。
+5. 每次外部动作通过 Transport Extension 自动写入 `ActionLog`。
 
 ## 7. 数据存储要求
 

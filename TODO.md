@@ -6,16 +6,35 @@
 
 目标：验证飞书消息能收能发，是所有后续功能的地基。
 
-- [ ] 飞书应用配置读取：App ID、App Secret、事件订阅配置
-- [ ] 飞书事件来源校验或验签
-- [ ] 飞书事件订阅接入：Webhook 或 WebSocket
+### CLI 基础设施
+
+- [ ] 编译 teamflow-cli：基于 lark-cli 源码，注入 Credential 和 Transport 扩展
+- [ ] 实现 Credential Extension：从 TeamFlow 配置读取 App ID / App Secret
+- [ ] 实现 Transport Extension：拦截请求/响应，输出结构化 ActionLog 日志
+- [ ] 验证 CLI 基础命令可用：`teamflow-cli im +messages-send --help`
+
+### 事件接入
+
+- [ ] 启动 `teamflow-cli event +subscribe` 长驻进程
+- [ ] 配置事件类型：`im.message.receive_v1` 等
+- [ ] 实现文件监听：watch output-dir 中的 NDJSON 事件文件
+- [ ] 飞书原始事件去重
+- [ ] Bot 自身消息过滤，避免消息循环
+
+### 消息处理
+
 - [ ] 私聊消息接收与解析
 - [ ] 群消息接收与解析：仅响应 @Bot 或明确命令
-- [ ] Bot 自身消息过滤，避免消息循环
-- [ ] 飞书原始事件去重
+- [ ] 从消息上下文提取用户 open_id
+
+### 消息发送
+
+- [ ] 封装 `execution.send_message(chat_id, text)` → subprocess 调用 `im +messages-send`
 - [ ] 主动发送私聊消息
 - [ ] 主动发送群消息
-- [ ] 从消息上下文提取用户 open_id
+
+### 运维
+
 - [ ] 接入日志：记录消息进入、解析结果、忽略原因
 - [ ] `/health` 轻量健康检查
 - [ ] 端到端验证：用户发消息 -> 服务收到 -> 服务回复消息
@@ -62,10 +81,10 @@
 - [ ] 监听 `project.created` 事件
 - [ ] 校验 `project.created` 幂等键
 - [ ] 读取项目基础信息
-- [ ] 创建或复用飞书项目群：`TeamFlow | {项目名}`
-- [ ] 拉管理员入群
-- [ ] 获取群分享链接
-- [ ] 创建或复用项目文档
+- [ ] 创建或复用飞书项目群：`TeamFlow | {项目名}`（`im +chat-create`）
+- [ ] 拉管理员入群（`im +chat-members-add`）
+- [ ] 获取群分享链接（`im +chat-link`）
+- [ ] 创建或复用项目文档（`docs +create`）
 - [ ] 项目文档包含项目名称、负责人、仓库信息、创建时间
 - [ ] 群 ID、群链接、文档 URL、初始化状态写回项目记录
 - [ ] 向管理员发送初始化结果回执：每步成功或失败状态
@@ -189,9 +208,11 @@
 ### 接入与执行
 
 - [ ] 三层架构：接入层 -> 业务编排层 -> 执行层
-- [ ] 执行层统一封装：Feishu CLI 或 SDK、数据库读写、通知发送、文档创建、模型调用
-- [ ] 执行结果结构化：success、action_name、target、output、error_message
-- [ ] 外部动作统一写入 `ActionLog`
+- [ ] Python 执行层封装：`execution` 模块统一封装 teamflow-cli subprocess 调用
+- [ ] CLI 命令映射：每个业务动作对应具体 CLI 命令和参数
+- [ ] 执行结果结构化：解析 CLI stdout JSON → success、action_name、target、output、error_message
+- [ ] Transport Extension 自动记录 ActionLog：解析 CLI stderr 结构化日志
+- [ ] CLI 进程管理：短命令同步调用，事件订阅长驻进程监控和自动重启
 
 ### 数据存储
 

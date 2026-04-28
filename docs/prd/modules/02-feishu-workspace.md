@@ -153,7 +153,20 @@ TeamFlow | {项目名}
 
 ## 9. 执行策略
 
-执行层优先封装 Feishu CLI 或飞书 SDK，但模块只依赖统一执行接口。
+执行层通过 Python `execution` 模块封装 teamflow-cli subprocess 调用。模块只依赖统一执行接口，不直接组装 CLI 命令。
+
+核心命令映射：
+
+| 步骤 | CLI 命令 |
+|------|----------|
+| 创建群 | `im +chat-create --name "TeamFlow \| {name}" --type private --users {admin_id}` |
+| 拉人入群 | `im +chat-members-add --chat-id {group_id} --users {admin_id}` |
+| 获取群链接 | `im +chat-link --chat-id {group_id}` |
+| 创建文档 | `docs +create --title "TeamFlow \| {name}" --content {content}` |
+| 发送回执 | `im +messages-send --user-id {admin_id} --markdown {receipt}` |
+| 发送欢迎消息 | `im +messages-send --chat-id {group_id} --markdown {welcome}` |
+
+Transport Extension 自动记录每个 API 调用到 ActionLog，无需业务层手动记录。
 
 统一执行结果格式至少包含：
 
@@ -167,7 +180,7 @@ TeamFlow | {项目名}
 
 | 异常 | 处理要求 |
 |---|---|
-| Feishu CLI 或 SDK 不可用 | 终止初始化，返回平台依赖错误 |
+| teamflow-cli 不可用 | 终止初始化，返回平台依赖错误 |
 | 群创建失败 | 记录失败，继续判断是否能发送管理员回执 |
 | 管理员入群失败 | 记录失败，继续获取链接和创建文档 |
 | 群链接获取失败 | 允许继续，写入失败原因 |

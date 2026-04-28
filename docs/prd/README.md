@@ -8,11 +8,12 @@
 
 1. [产品总纲](./00-product-overview.md)：理解产品定位、阶段目标、核心闭环和模块划分。
 2. [MVP 范围](./01-mvp-scope.md)：明确第一阶段必须交付、暂不交付和里程碑边界。
-3. [模块 PRD](./modules/01-project-entry-and-onboarding.md)：逐个理解业务模块的输入、输出、规则和验收要求。
-4. [数据与事件模型](./02-data-and-event-model.md)：对齐开发需要的核心对象、状态、事件 payload 和幂等规则。
-5. [验收清单](./03-acceptance-checklist.md)：按场景验证是否满足交付标准。
-6. [测试策略](./04-testing-strategy.md)：指导本地、集成和真实飞书环境下的验证方式。
-7. [提示词模板](./05-prompt-templates.md)：维护第一阶段 AI 输出所需的基础提示词。
+3. [技术架构](./06-technical-architecture.md)：理解混合架构（Python 主进程 + teamflow-cli 执行层）的技术选型和集成方式。
+4. [模块 PRD](./modules/01-project-entry-and-onboarding.md)：逐个理解业务模块的输入、输出、规则和验收要求。
+5. [数据与事件模型](./02-data-and-event-model.md)：对齐开发需要的核心对象、状态、事件 payload 和幂等规则。
+6. [验收清单](./03-acceptance-checklist.md)：按场景验证是否满足交付标准。
+7. [测试策略](./04-testing-strategy.md)：指导本地、集成和真实飞书环境下的验证方式。
+8. [提示词模板](./05-prompt-templates.md)：维护第一阶段 AI 输出所需的基础提示词。
 
 ## 文档结构
 
@@ -24,6 +25,7 @@
 4. [03-acceptance-checklist.md](./03-acceptance-checklist.md)
 5. [04-testing-strategy.md](./04-testing-strategy.md)
 6. [05-prompt-templates.md](./05-prompt-templates.md)
+7. [06-technical-architecture.md](./06-technical-architecture.md)
 
 ### 模块 PRD
 
@@ -66,7 +68,8 @@ TeamFlow 的第一阶段主链路为：
 ## 当前仍需继续补充
 
 1. 飞书开放平台权限清单和申请说明。
-2. Feishu CLI 的具体命令封装规范。
-3. API 接口清单和错误码。
-4. 调度配置示例。
-5. 飞书开放平台真实租户配置截图或操作手册。
+2. teamflow-cli Credential Extension 具体实现规范。
+3. teamflow-cli Transport Extension 日志格式规范。
+4. API 接口清单和错误码。
+5. 调度配置示例。
+6. 飞书开放平台真实租户配置截图或操作手册。
