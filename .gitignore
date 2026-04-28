@@ -76,6 +76,7 @@ vendor/
 .hermes/
 .worktrees/
 ignored/
+config.yaml
 
 # === Private keys ===
 *.ppk

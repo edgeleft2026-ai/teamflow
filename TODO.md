@@ -6,38 +6,47 @@
 
 目标：验证飞书消息能收能发，是所有后续功能的地基。
 
+### 项目基础设施
+
+- [x] Python 项目骨架：pyproject.toml + src/teamflow/ 目录结构
+- [x] 配置模块：`config/settings.py` + `config.example.yaml`
+- [x] 执行层封装：`execution/cli.py` — lark-cli subprocess 调用 + tenant_access_token 自动交换与注入
+- [x] `pip install -e .` 验证通过
+- [x] CLI 入口：`teamflow setup` / `teamflow run` 命令行工具（`__main__.py`）
+
 ### CLI 基础设施
 
-- [ ] 编译 teamflow-cli：基于 lark-cli 源码，注入 Credential 和 Transport 扩展
-- [ ] 实现 Credential Extension：从 TeamFlow 配置读取 App ID / App Secret
-- [ ] 实现 Transport Extension：拦截请求/响应，输出结构化 ActionLog 日志
-- [ ] 验证 CLI 基础命令可用：`teamflow-cli im +messages-send --help`
+- [x] 安装 lark-cli 二进制（从 cli/ 源码编译）
+- [x] 验证 CLI 基础命令可用：`lark-cli --help`
+- [x] Setup 命令：QR 扫码自动创建飞书应用 + 手动凭证输入（`setup/feishu.py` + `setup/cli.py`）
+- [x] 创建 config.yaml（运行 `teamflow setup` 或手动填写真实凭证）
+- [x] 验证凭证注入：执行层自动交换 tenant_access_token，bot 身份 API 调用正常
 
 ### 事件接入
 
-- [ ] 启动 `teamflow-cli event +subscribe` 长驻进程
-- [ ] 配置事件类型：`im.message.receive_v1` 等
-- [ ] 实现文件监听：watch output-dir 中的 NDJSON 事件文件
-- [ ] 飞书原始事件去重
-- [ ] Bot 自身消息过滤，避免消息循环
+- [x] 启动 `lark-cli event +subscribe` 长驻进程（`main.py` 中实现）
+- [x] 配置事件类型：`im.message.receive_v1` 等
+- [x] 实现文件监听：`access/watcher.py` — EventFileWatcher 监听 NDJSON 事件文件
+- [x] 飞书原始事件去重：`access/dispatcher.py` — EventDispatcher 按 event_id 去重
+- [x] Bot 自身消息过滤：`access/parser.py` — is_bot_message() 检查 sender_type
 
 ### 消息处理
 
-- [ ] 私聊消息接收与解析
-- [ ] 群消息接收与解析：仅响应 @Bot 或明确命令
-- [ ] 从消息上下文提取用户 open_id
+- [x] 私聊消息接收与解析：`access/parser.py` — parse_ndjson_line + extract_*
+- [x] 群消息接收与解析：同一套解析逻辑
+- [x] 从消息上下文提取用户 open_id：extract_open_id()
 
 ### 消息发送
 
-- [ ] 封装 `execution.send_message(chat_id, text)` → subprocess 调用 `im +messages-send`
-- [ ] 主动发送私聊消息
-- [ ] 主动发送群消息
+- [x] 封装 `send_message()` → `execution/messages.py`
+- [x] 主动发送私聊消息：send_message(user_id=...)
+- [x] 主动发送群消息：send_message(chat_id=...)
 
 ### 运维
 
-- [ ] 接入日志：记录消息进入、解析结果、忽略原因
-- [ ] `/health` 轻量健康检查
-- [ ] 端到端验证：用户发消息 -> 服务收到 -> 服务回复消息
+- [x] 接入日志：logging 框架记录消息进入、解析结果、忽略原因
+- [x] `/health` 轻量健康检查：main.py 中 HTTPServer 响应
+- [x] 端到端验证：用户发消息 -> 服务收到事件 -> 服务回复消息（已通过真实凭证验证）
 
 验收依据：`docs/prd/03-acceptance-checklist.md` 的 M0 部分。
 
@@ -208,10 +217,10 @@
 ### 接入与执行
 
 - [ ] 三层架构：接入层 -> 业务编排层 -> 执行层
-- [ ] Python 执行层封装：`execution` 模块统一封装 teamflow-cli subprocess 调用
+- [x] Python 执行层封装：`execution/cli.py` 封装 lark-cli subprocess 调用 + 环境变量注入
 - [ ] CLI 命令映射：每个业务动作对应具体 CLI 命令和参数
-- [ ] 执行结果结构化：解析 CLI stdout JSON → success、action_name、target、output、error_message
-- [ ] Transport Extension 自动记录 ActionLog：解析 CLI stderr 结构化日志
+- [x] 执行结果结构化：`CLIResult` 返回 success、output、error、stderr_log
+- [ ] CLI 日志解析：解析 CLI stderr 提取结构化信息写入 ActionLog
 - [ ] CLI 进程管理：短命令同步调用，事件订阅长驻进程监控和自动重启
 
 ### 数据存储

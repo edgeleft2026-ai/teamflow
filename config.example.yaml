@@ -1,0 +1,7 @@
+# TeamFlow Configuration
+# Copy this file to config.yaml and fill in your Feishu app credentials.
+
+feishu:
+  app_id: "cli_xxxxxxxxxxxx"
+  app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  brand: "feishu"  # "feishu" for China, "lark" for international
