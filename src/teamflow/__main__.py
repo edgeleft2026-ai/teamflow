@@ -52,7 +52,18 @@ def _cmd_setup() -> None:
 
 def _cmd_run() -> None:
     """启动应用，配置缺失时自动进入设置向导。"""
-    from teamflow.setup.cli import ensure_config
+    from teamflow.setup.cli import ensure_config, _check_lark_cli, _install_lark_cli_guide
+
+    # 先检查 lark-cli 环境
+    lark_cli_path = _check_lark_cli()
+    if not lark_cli_path:
+        print("  [环境检查] 未检测到 lark-cli。")
+        ok = _install_lark_cli_guide()
+        if not ok:
+            print("  lark-cli 未就绪，无法启动。请手动安装后重试。")
+            sys.exit(1)
+    else:
+        print(f"  [环境检查] lark-cli 已就绪: {lark_cli_path}")
 
     if not ensure_config():
         print("  设置未完成，无法启动。")

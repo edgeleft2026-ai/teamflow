@@ -18,6 +18,18 @@ class FeishuEvent:
     raw: dict = field(default_factory=dict, repr=False)
 
 
+@dataclass
+class CardActionData:
+    """Parsed data from a card.action.trigger event."""
+
+    open_id: str
+    chat_id: str
+    action_tag: str
+    action_value: dict
+    form_values: dict
+    token: str
+
+
 def parse_ndjson_line(line: str) -> FeishuEvent | None:
     """Parse a single NDJSON line into a FeishuEvent.
 
@@ -114,3 +126,35 @@ def extract_message_text(event: FeishuEvent) -> str | None:
         return content.get("text", "")
     except json.JSONDecodeError:
         return content_str
+
+
+def extract_card_action_data(event: FeishuEvent) -> CardActionData | None:
+    """Extract all relevant data from a card.action.trigger event."""
+    body = event.body
+    ev = body.get("event", {})
+    if not isinstance(ev, dict):
+        return None
+
+    context = ev.get("context", {})
+    chat_id = context.get("open_chat_id") if isinstance(context, dict) else None
+
+    operator = ev.get("operator", {})
+    open_id = operator.get("open_id") if isinstance(operator, dict) else None
+
+    if not chat_id or not open_id:
+        return None
+
+    action = ev.get("action", {})
+    action_tag = action.get("tag", "") if isinstance(action, dict) else ""
+    action_value = action.get("value", {}) if isinstance(action, dict) else {}
+    form_values = ev.get("form_value", {}) or {}
+    token = ev.get("token", "") or ""
+
+    return CardActionData(
+        open_id=open_id,
+        chat_id=chat_id,
+        action_tag=action_tag,
+        action_value=action_value if isinstance(action_value, dict) else {},
+        form_values=form_values if isinstance(form_values, dict) else {},
+        token=token,
+    )

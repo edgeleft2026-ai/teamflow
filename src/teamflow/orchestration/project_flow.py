@@ -48,6 +48,24 @@ class ProjectCreateFlow:
         self.action_repo = ActionLogRepo(session)
         self.event_bus = event_bus
 
+    def create_from_form(self, open_id: str, chat_id: str, form_values: dict) -> None:
+        """Create a project from a card form submission."""
+        project_name = (form_values.get("project_name") or "").strip()
+        git_repo_path = (form_values.get("git_repo_path") or "").strip()
+
+        if not project_name or not git_repo_path:
+            send_card(
+                self.feishu,
+                project_failed_card("表单验证", "项目名称和仓库地址不能为空。"),
+                chat_id=chat_id,
+            )
+            return
+
+        self._create_project(open_id, chat_id, {
+            "project_name": project_name,
+            "git_repo_path": git_repo_path,
+        })
+
     def start(self, open_id: str, chat_id: str) -> None:
         """开始创建项目流程。"""
         # 清除旧的活跃会话（允许重新开始）

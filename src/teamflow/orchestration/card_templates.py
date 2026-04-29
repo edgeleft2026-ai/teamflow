@@ -156,6 +156,97 @@ def project_created_card(project_id: str, name: str, repo: str) -> dict:
     }
 
 
+def project_create_form_card() -> dict:
+    """Interactive card with a form for project creation (JSON 2.0)."""
+    return {
+        "schema": "2.0",
+        "header": {
+            "title": {"tag": "plain_text", "content": "创建新项目"},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "form",
+                    "name": "project_create_form",
+                    "elements": [
+                        {
+                            "tag": "input",
+                            "name": "project_name",
+                            "placeholder": {
+                                "tag": "plain_text",
+                                "content": "请输入项目名称",
+                            },
+                            "label": {
+                                "tag": "plain_text",
+                                "content": "项目名称",
+                            },
+                        },
+                        {
+                            "tag": "input",
+                            "name": "git_repo_path",
+                            "placeholder": {
+                                "tag": "plain_text",
+                                "content": "https://github.com/org/repo",
+                            },
+                            "label": {
+                                "tag": "plain_text",
+                                "content": "Git 仓库地址",
+                            },
+                        },
+                        {
+                            "tag": "column_set",
+                            "flex_mode": "none",
+                            "columns": [
+                                {
+                                    "tag": "column",
+                                    "width": "auto",
+                                    "elements": [
+                                        {
+                                            "tag": "button",
+                                            "text": {
+                                                "tag": "plain_text",
+                                                "content": "提交创建",
+                                            },
+                                            "type": "primary",
+                                            "action_type": "form_submit",
+                                            "name": "btn_submit",
+                                            "value": {"teamflow_action": "submit_project_form"},
+                                        },
+                                    ],
+                                },
+                                {
+                                    "tag": "column",
+                                    "width": "auto",
+                                    "elements": [
+                                        {
+                                            "tag": "button",
+                                            "text": {
+                                                "tag": "plain_text",
+                                                "content": "重置",
+                                            },
+                                            "type": "default",
+                                            "action_type": "form_reset",
+                                            "name": "btn_reset",
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": "如需取消，可直接忽略此卡片。",
+                    },
+                },
+            ],
+        },
+    }
+
+
 def project_failed_card(step: str, reason: str) -> dict:
     return {
         "config": {"wide_screen_mode": True},

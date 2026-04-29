@@ -61,6 +61,7 @@ yarn-error.log*
 
 # === Go (cli) ===
 lark-cli
+lark-cli.exe
 bin/
 vendor/
 

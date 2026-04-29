@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import time
@@ -49,9 +50,54 @@ _token_cache: dict[str, _CachedToken] = {}
 
 
 def find_cli_binary(name: str = "lark-cli") -> str:
-    """Find lark-cli binary in PATH or return the name as-is."""
+    """Find lark-cli binary in PATH or common install locations.
+
+    Cross-platform resolution order:
+    1. shutil.which(name)  — PATH lookup
+    2. npm global prefix   — lark-cli installed via npm install -g @larksuite/cli
+    3. Return name as-is   — let subprocess raise FileNotFoundError with a clear message
+    """
     resolved = shutil.which(name)
-    return resolved or name
+    if resolved:
+        return resolved
+
+    # npm global binaries may not be on PATH in CI/container environments
+    npm_prefix_candidates = []
+    if os.name == "nt":
+        # Windows: %APPDATA%\npm or %LOCALAPPDATA%\npm
+        for env_var in ("LOCALAPPDATA", "APPDATA"):
+            val = os.environ.get(env_var)
+            if val:
+                npm_prefix_candidates.append(os.path.join(val, "npm"))
+        # Also check Node.js default install path
+        prog_files = os.environ.get("ProgramFiles")
+        if prog_files:
+            npm_prefix_candidates.append(os.path.join(prog_files, "nodejs"))
+    else:
+        # Unix-like: /usr/local/bin, /usr/bin, ~/.npm-global/bin, ~/.local/bin
+        npm_prefix_candidates.extend([
+            "/usr/local/bin",
+            "/usr/bin",
+            os.path.expanduser("~/.npm-global/bin"),
+            os.path.expanduser("~/.local/bin"),
+        ])
+        # Respect npm prefix if configured
+        npm_prefix = os.environ.get("NPM_CONFIG_PREFIX") or os.environ.get("npm_config_prefix")
+        if npm_prefix:
+            npm_prefix_candidates.append(os.path.join(npm_prefix, "bin"))
+
+    for directory in npm_prefix_candidates:
+        candidate = os.path.join(directory, name)
+        if os.name == "nt":
+            for ext in (".exe", ".cmd", ".bat", ""):
+                full = candidate + ext
+                if os.path.isfile(full) and os.access(full, os.X_OK):
+                    return full
+        else:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+
+    return name
 
 
 def _exchange_tenant_token(feishu: FeishuConfig) -> str:
@@ -126,9 +172,17 @@ def run_cli(
             env=env,
         )
     except FileNotFoundError:
+        platform_hint = ""
+        if os.name != "nt":
+            platform_hint = (
+                " On Linux/macOS, install via: npm install -g @larksuite/cli"
+            )
         return CLIResult(
             success=False,
-            error=f"CLI binary not found: {binary}. Install lark-cli and ensure it is in PATH.",
+            error=(
+                f"CLI binary not found: {binary}. Install lark-cli and ensure it is in PATH."
+                f"{platform_hint}"
+            ),
         )
     except subprocess.TimeoutExpired:
         return CLIResult(success=False, error=f"CLI command timed out after {timeout}s")

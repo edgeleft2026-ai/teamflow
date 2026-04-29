@@ -8,8 +8,14 @@ import subprocess
 from pathlib import Path
 
 from teamflow.access import EventDispatcher, EventFileWatcher, FeishuEvent, is_bot_message
-from teamflow.access.parser import extract_chat_id, extract_message_text, extract_open_id
+from teamflow.access.callback import start_callback_thread
+from teamflow.access.parser import (
+    extract_chat_id,
+    extract_message_text,
+    extract_open_id,
+)
 from teamflow.config import load_config
+from teamflow.execution.cli import find_cli_binary
 from teamflow.orchestration.command_router import CommandRouter
 from teamflow.storage.database import init_db
 
@@ -37,6 +43,11 @@ def start_event_subscriber(
 ) -> subprocess.Popen:
     """Start lark-cli event +subscribe as a long-running subprocess."""
     output_path = Path(output_dir)
+    # Clean old event files to avoid replaying stale events from previous runs
+    if output_path.exists():
+        for f in output_path.rglob("*"):
+            if f.is_file():
+                f.unlink(missing_ok=True)
     output_path.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -137,7 +148,9 @@ async def main() -> None:
         logger.warning("admin_open_id not configured, skipping startup self-test")
 
     # Resolve paths
-    cli_binary = os.getenv("LARK_CLI_BINARY", "lark-cli")
+    cli_binary = os.getenv("LARK_CLI_BINARY")
+    if not cli_binary:
+        cli_binary = find_cli_binary("lark-cli")
     output_dir = os.getenv("TEAMFLOW_EVENT_DIR", DEFAULT_OUTPUT_DIR)
     event_types = os.getenv("TEAMFLOW_EVENT_TYPES", None)
 
@@ -164,6 +177,14 @@ async def main() -> None:
         return
     logger.info("Event subscriber is running")
 
+    # Start card callback WebSocket client (handles card.action.trigger)
+    start_callback_thread(
+        app_id=feishu.app_id,
+        app_secret=feishu.app_secret,
+        brand=feishu.brand,
+        router=router,
+    )
+
     # Set up event dispatcher
     dispatcher = EventDispatcher()
     dispatcher.on("im.message.receive_v1", lambda e: handle_message_event(e, router, feishu.app_id))
@@ -179,7 +200,7 @@ async def main() -> None:
     watcher = EventFileWatcher(Path(output_dir))
 
     # Start health check server
-    health_port = int(os.getenv("TEAMFLOW_HEALTH_PORT", "8080"))
+    health_port = int(os.getenv("TEAMFLOW_HEALTH_PORT", "9090"))
     health_server = await _start_health_server(port=health_port)
     logger.info("Health check at http://127.0.0.1:%d/health", health_port)
 
