@@ -86,56 +86,71 @@
 
 ## 6. 执行层要求
 
-执行层基于 **teamflow-cli**（从 lark-cli 编译的 Go 二进制）实现，Python 主进程通过 subprocess 调用。
+执行层采用**双通道架构**：确定性通道（lark-cli subprocess）和智能通道（Agent + MCP）。
 
-### 6.1 CLI 集成架构
+### 6.1 确定性通道
 
 ```text
 Python 主进程
   → execution 模块构建 CLI 命令和参数
-  → subprocess.run(["teamflow-cli", ...])
+  → subprocess.run(["lark-cli", ...])
   → 解析 stdout JSON 输出（业务结果）
-  → 解析 stderr 结构化日志（ActionLog）
-  → 返回统一结果格式
+  → 捕获 stderr 日志
+  → 返回 CLIResult(success, output, error, stderr_log)
 ```
 
-### 6.2 CLI 扩展
+适用场景：发消息、拉人入群、事件订阅等高频确定性动作。
 
-teamflow-cli 注入两个扩展（通过 Go blank import 机制）：
+### 6.2 智能通道
 
-**Credential Extension**：实现 `credential.Provider` 接口
-- 从 TeamFlow 配置文件或环境变量读取 App ID / App Secret
-- 支持 bot 和 user 两种身份模式
-- 不依赖 CLI 内置的 OAuth 或 sidecar 认证流程
+```text
+Python 主进程
+  → 编排层构建 AgentTask(description, context, complexity)
+  → Agent Executor (LiteLLM tool-use 循环)
+    → MCP Client → @larksuiteoapi/lark-mcp → 飞书 API
+  → 返回 AgentResult(success, summary, actions, data)
+```
 
-**Transport Extension**：实现 `transport.Provider` + `transport.Interceptor` 接口
-- PreRoundTrip：提取请求 method、path、body hash
-- PostRoundTrip：提取响应 status、body 摘要
-- 自动输出结构化 JSON 日志，格式兼容 ActionLog
-- 业务编排层无需手动记录每个飞书 API 调用的 ActionLog
+适用场景：工作空间初始化、报告生成、风险分析等多步编排。
 
-### 6.3 命令映射
+Agent 通过 MCP `tools/list` 动态发现可用工具，通过 `-t` 参数按里程碑启用工具集。
+
+### 6.3 通道选择
+
+编排层根据动作复杂度选择通道：参数完全确定的单步调用走确定性通道，多步编排或需要 AI 判断的走智能通道。默认确定性通道，降级安全。
+
+### 6.4 确定性通道命令映射
 
 | 业务动作 | CLI 命令 | 说明 |
 |----------|----------|------|
 | 发送消息 | `im +messages-send` | 支持 --chat-id / --user-id、--text / --markdown |
-| 创建群 | `im +chat-create` | 支持 --name、--users、--type |
 | 拉人入群 | `im +chat-members-add` | — |
 | 获取群链接 | `im +chat-link` | — |
-| 创建文档 | `docs +create` | 支持 --title、--content |
 | 订阅事件 | `event +subscribe` | 长驻进程，--output-dir、--route |
 
-### 6.4 统一结果格式
+### 6.5 统一结果格式
 
-Python 执行层封装 CLI 输出为统一格式：
+确定性通道返回 `CLIResult`：
 
 ```json
 {
   "success": true,
-  "action_name": "create_feishu_group",
-  "target": "project_xxx",
   "output": {},
-  "error_message": null
+  "error": null,
+  "stderr_log": "",
+  "return_code": 0
+}
+```
+
+智能通道返回 `AgentResult`：
+
+```json
+{
+  "success": true,
+  "summary": "已创建项目群和文档",
+  "actions": [{"tool": "im.v1.chat.create", "args": {...}, "result": {...}}],
+  "data": {"chat_id": "...", "doc_url": "..."},
+  "error": null
 }
 ```
 
@@ -144,7 +159,7 @@ Python 执行层封装 CLI 输出为统一格式：
 事件订阅是唯一的长驻 CLI 进程：
 
 ```bash
-teamflow-cli event +subscribe \
+lark-cli event +subscribe \
   --event-types im.message.receive_v1,... \
   --compact \
   --output-dir /tmp/teamflow/events \
@@ -158,8 +173,8 @@ teamflow-cli event +subscribe \
 1. 输入参数明确。
 2. 输出结果结构化（JSON）。
 3. 失败原因明确（CLI stderr 包含错误信息）。
-4. 敏感信息脱敏（Transport Extension 在记录日志前脱敏）。
-5. 每次外部动作通过 Transport Extension 自动写入 `ActionLog`。
+4. 敏感信息脱敏（日志记录前脱敏）。
+5. 确定性通道动作写入 ActionLog；智能通道工具调用链写入 Agent 审计日志。
 
 ## 7. 数据存储要求
 

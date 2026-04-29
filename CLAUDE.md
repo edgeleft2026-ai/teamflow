@@ -4,21 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-TeamFlow 是一个运行在飞书场景中的 AI 项目协作助手。核心主链路：用户在飞书中发起项目 → 系统完成创建和协作空间初始化 → 围绕项目提供提醒、汇报和查询。项目处于早期规划阶段，当前只有 PRD 文档，尚无业务源代码。
+TeamFlow 是一个运行在飞书场景中的 AI 项目协作助手。核心主链路：用户在飞书中发起项目 → 系统完成创建和协作空间初始化 → 围绕项目提供提醒、汇报和查询。M0+M1 已完成（消息收发、项目创建），当前推进 Agent 基础设施建设。
 
 ## 技术选型
 
-混合架构：**Python 主进程**（业务编排 + AI）+ **lark-cli**（预编译 Go 二进制，subprocess 调用）。
+双通道架构：**Python 主进程**（业务编排 + AI Agent）+ **双执行层**（确定性通道：lark-cli subprocess；智能通道：Agent + MCP）。
 
 | 层 | 技术 | 理由 |
 |---|---|---|
 | 业务编排 | Python 3.12+, asyncio | AI 生态成熟、迭代快 |
 | 数据库 | SQLModel + SQLite | 类型安全、零运维 |
-| AI 调用 | LiteLLM | 统一多模型接口 |
+| AI 调用 | LiteLLM + 自建 tool-use 循环 | 统一多模型接口、模型无关 |
+| Agent 工具 | `@larksuiteoapi/lark-mcp`（飞书官方 MCP Server） | 全量 OpenAPI、动态工具发现 |
+| MCP 客户端 | Python `mcp` SDK | 官方 MCP 协议实现 |
 | 调度 | APScheduler | 轻量 cron/interval |
-| 执行层 | lark-cli (Go subprocess) | 飞书官方 CLI，200+ 命令 |
-| 凭证管理 | Python 环境变量注入 | 从 config.yaml 读取，注入 LARKSUITE_CLI_APP_ID 等环境变量 |
-| 请求追踪 | Python stderr 捕获 | 执行层封装自动捕获 CLI 日志 |
+| 确定性执行层 | lark-cli (Go subprocess) | 高频确定性动作：发消息、拉人、事件订阅 |
+| 凭证管理 | Python 环境变量注入 + MCP 启动参数 | 确定性通道走环境变量，Agent 通道走 `-a/-s` 启动参数 |
+| 请求追踪 | stderr 捕获 + Agent 审计日志 | 双通道分别追踪 |
 | 事件订阅 | `lark-cli event +subscribe` | WebSocket + NDJSON 输出 |
 
 完整技术架构见 `docs/prd/06-technical-architecture.md`。
@@ -41,9 +43,9 @@ teamflow/
 │   ├── teamflow/          # Python 主进程源码
 │   │   ├── core/          # 领域模型
 │   │   ├── access/        # 接入层
-│   │   ├── orchestration/ # 编排层
-│   │   ├── execution/     # 执行层（lark-cli subprocess 封装）
-│   │   ├── ai/            # AI 层
+│   │   ├── orchestration/ # 编排层（双通道调度）
+│   │   ├── execution/     # 确定性执行层（lark-cli subprocess 封装）
+│   │   ├── ai/            # AI 层（Agent executor + MCP client + 提示词 + 模型路由）
 │   │   ├── scheduling/    # 调度层
 │   │   ├── storage/       # 数据层
 │   │   └── config/        # 配置管理
@@ -55,26 +57,31 @@ teamflow/
 
 ## 架构设计
 
-三层架构 + 混合语言实现，严格单向依赖：
+三层架构 + 双通道执行，严格单向依赖：
 
 ```
 Python 主进程
 ├── 接入层 — 消费 CLI 事件订阅进程的 NDJSON 输出、指令解析、消息路由
-├── 业务编排层 — 状态机、事件分发、流程编排（不直接调用飞书 API）
-├── AI 层 — LiteLLM 多模型路由、提示词管理、降级策略
+├── 业务编排层 — 状态机、事件分发、流程编排、双通道调度（不直接调用飞书 API）
+├── AI 层 — LiteLLM tool-use 循环、MCP 客户端、提示词管理、降级策略
 │
-│  subprocess ↓
+│  双通道执行 ↓
 │
-└── 执行层 (lark-cli, 预编译 Go 二进制)
-    ├── Python 执行层封装 — subprocess 调用，环境变量注入凭证
-    ├── CLI 日志捕获 — stderr 结构化日志解析
-    └── 事件订阅 — 长驻进程 WebSocket → NDJSON → 文件输出
+├── 确定性通道 (lark-cli, 预编译 Go 二进制)
+│   ├── Python 执行层封装 — subprocess 调用，环境变量注入凭证
+│   ├── CLI 日志捕获 — stderr 结构化日志解析
+│   └── 事件订阅 — 长驻进程 WebSocket → NDJSON → 文件输出
+│
+└── 智能通道 (Agent + @larksuiteoapi/lark-mcp MCP Server)
+    ├── MCP Client (Python mcp SDK, stdio transport)
+    └── Agent executor — LiteLLM tool-use 循环，动态发现和调用飞书工具
 ```
 
 关键约束：
-- 编排层通过 subprocess 调用 lark-cli 命令，解析 JSON 输出
-- Python 执行层通过环境变量注入凭证，捕获 stderr 作为日志
-- 事件订阅是唯一长驻 CLI 进程，主进程通过文件监听消费事件
+- 简单确定性动作（发消息、拉人入群）走确定性通道，复杂多步编排走 Agent 智能通道
+- 编排层根据动作复杂度选择执行通道，默认确定性通道
+- Agent 通过 MCP 协议动态发现飞书工具，不硬编码命令映射
+- Agent 设置 max_iterations 防止无限循环，高风险动作不加入 Agent 工具集
 
 ## 核心业务概念
 

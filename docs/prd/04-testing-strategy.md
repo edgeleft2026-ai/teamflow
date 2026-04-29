@@ -33,9 +33,9 @@
 
 覆盖外部接口和执行层封装：
 
-1. teamflow-cli 命令输入输出格式（subprocess 调用契约）。
+1. lark-cli 命令输入输出格式（确定性通道 subprocess 调用契约）。
 2. CLI 命令映射验证：业务动作 → CLI 命令 + 参数。
-3. Transport Extension 结构化日志输出格式（ActionLog 契约）。
+3. MCP 工具调用契约（Agent 智能通道）。
 4. 飞书事件 payload 解析（NDJSON 格式）。
 5. 数据库读写接口。
 6. 模型调用接口。
@@ -84,7 +84,7 @@
 Python 执行层通过 subprocess 调用 CLI，测试时替换为 mock CLI 二进制：
 
 1. mock CLI 接收相同参数，返回预设 JSON 输出。
-2. mock CLI 在 stderr 输出预设的 Transport Extension 日志。
+2. mock CLI 在 stderr 输出预设日志。
 3. mock CLI 可模拟不同退出码（0=成功，1=业务错误，2=网络错误）。
 
 ### 4.2 事件 Mock
@@ -109,7 +109,7 @@ Mock 测试必须断言：
 1. 传递给 CLI 的参数正确。
 2. 数据库状态变化正确。
 3. 事件被正确发布或忽略。
-4. Transport Extension 日志被正确解析和记录。
+4. Agent 工具调用链被正确记录到审计日志。
 5. 错误被写入日志。
 6. 用户可见回执内容包含失败原因。
 
@@ -161,8 +161,8 @@ Mock 测试必须断言：
 2. 会话状态机。
 3. 项目表结构。
 4. 事件总线。
-5. teamflow-cli subprocess 封装（命令构建、输出解析、错误处理）。
-6. Transport Extension 日志解析。
+5. lark-cli subprocess 封装（命令构建、输出解析、错误处理）。
+6. MCP Client 工具调用与结果解析。
 7. 消息发送封装。
 8. 定时调度。
 9. AI 调用和提示词模板。

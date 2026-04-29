@@ -153,20 +153,14 @@ TeamFlow | {项目名}
 
 ## 9. 执行策略
 
-执行层通过 Python `execution` 模块封装 teamflow-cli subprocess 调用。模块只依赖统一执行接口，不直接组装 CLI 命令。
+工作空间初始化采用双通道执行：
 
-核心命令映射：
+- **Agent 智能通道**：编排层构建任务描述（项目名、管理员 ID、初始化清单），委托 Agent 通过 MCP 调用飞书 API。Agent 负责多步编排（创建群 → 拉人 → 创建文档 → 发欢迎语）和部分失败处理。
+- **确定性通道**：初始化结果回写数据库、发送回执消息走确定性通道（subprocess 调用 lark-cli）。
 
-| 步骤 | CLI 命令 |
-|------|----------|
-| 创建群 | `im +chat-create --name "TeamFlow \| {name}" --type private --users {admin_id}` |
-| 拉人入群 | `im +chat-members-add --chat-id {group_id} --users {admin_id}` |
-| 获取群链接 | `im +chat-link --chat-id {group_id}` |
-| 创建文档 | `docs +create --title "TeamFlow \| {name}" --content {content}` |
-| 发送回执 | `im +messages-send --user-id {admin_id} --markdown {receipt}` |
-| 发送欢迎消息 | `im +messages-send --chat-id {group_id} --markdown {welcome}` |
+Agent 工具集：`im.v1.chat.create`, `im.v1.chat.members.create`, `im.v1.message.create`, `docx.v1.document.create`。
 
-Transport Extension 自动记录每个 API 调用到 ActionLog，无需业务层手动记录。
+编排层保留降级路径：Agent 执行超时或失败时，退回分步确定性通道执行。
 
 统一执行结果格式至少包含：
 
@@ -180,7 +174,7 @@ Transport Extension 自动记录每个 API 调用到 ActionLog，无需业务层
 
 | 异常 | 处理要求 |
 |---|---|
-| teamflow-cli 不可用 | 终止初始化，返回平台依赖错误 |
+| MCP Server 不可用 | 降级为确定性通道分步执行 |
 | 群创建失败 | 记录失败，继续判断是否能发送管理员回执 |
 | 管理员入群失败 | 记录失败，继续获取链接和创建文档 |
 | 群链接获取失败 | 允许继续，写入失败原因 |
