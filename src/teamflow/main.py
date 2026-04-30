@@ -177,6 +177,25 @@ async def main() -> None:
         return
     logger.info("Event subscriber is running")
 
+    # Initialize Agent tool provider with Feishu API client
+    tool_provider = None
+    try:
+        from teamflow.ai import tool_provider as tp
+        from teamflow.ai.tools.feishu import init_feishu_client
+
+        init_feishu_client(
+            app_id=feishu.app_id,
+            app_secret=feishu.app_secret,
+            brand=feishu.brand,
+        )
+        tool_provider = tp
+        logger.info(
+            "Agent smart channel ready (%d tools registered)",
+            len(tool_provider.tools),
+        )
+    except Exception:
+        logger.exception("Agent tool provider init failed, smart channel disabled")
+
     # Start card callback WebSocket client (handles card.action.trigger)
     start_callback_thread(
         app_id=feishu.app_id,
@@ -245,6 +264,11 @@ async def main() -> None:
         watcher.stop()
         watch_task.cancel()
         health_server.shutdown()
+        if tool_provider:
+            try:
+                await asyncio.wait_for(tool_provider.disconnect(), timeout=5)
+            except Exception:
+                logger.warning("Tool provider cleanup failed, forcing shutdown")
         if subscriber.poll() is None:
             subscriber.terminate()
             try:

@@ -6,6 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TeamFlow 是一个运行在飞书场景中的 AI 项目协作助手。核心主链路：用户在飞书中发起项目 → 系统完成创建和协作空间初始化 → 围绕项目提供提醒、汇报和查询。M0+M1 已完成（消息收发、项目创建），当前推进 Agent 基础设施建设。
 
+## 开发命令
+
+项目使用 Python 3.11+，虚拟环境位于 `.venv/`，以 editable 模式安装。
+
+```bash
+# 安装项目（editable + dev 依赖）
+pip install -e ".[dev,setup]"
+
+# 运行应用
+teamflow run           # 启动主事件循环
+teamflow setup         # 交互式设置向导（QR 扫码或手动输入凭证）
+teamflow reset         # 删除 config.yaml、数据库和临时文件
+
+# 测试（暂无测试文件；测试目录 src/tests/ 尚未创建）
+pytest                 # asyncio_mode = "auto"，测试路径 src/tests/
+
+# 代码检查
+ruff check src/
+```
+
+### 外部依赖
+
+- **lark-cli**：Go 二进制，通过 npm 安装。确定性通道通过 subprocess 调用，凭证通过环境变量注入。`teamflow setup` 会自动安装。
+- **Node.js LTS**：用于运行 `@larksuiteoapi/lark-mcp` MCP Server（Agent 通道需要，尚未集成）。
+
 ## 技术选型
 
 双通道架构：**Python 主进程**（业务编排 + AI Agent）+ **双执行层**（确定性通道：lark-cli subprocess；智能通道：Agent + MCP）。
@@ -41,19 +66,65 @@ teamflow/
 ├── cli/                   # lark-cli 源码（参考学习，不直接引用）
 ├── src/
 │   ├── teamflow/          # Python 主进程源码
-│   │   ├── core/          # 领域模型
-│   │   ├── access/        # 接入层
-│   │   ├── orchestration/ # 编排层（双通道调度）
+│   │   ├── core/          # 领域模型（StrEnum 枚举）
+│   │   ├── access/        # 接入层：NDJSON 事件解析、事件去重分发、卡片回调
+│   │   ├── orchestration/ # 编排层：CommandRouter、ProjectCreateFlow 状态机、EventBus、卡片模板
 │   │   ├── execution/     # 确定性执行层（lark-cli subprocess 封装）
-│   │   ├── ai/            # AI 层（Agent executor + MCP client + 提示词 + 模型路由）
-│   │   ├── scheduling/    # 调度层
-│   │   ├── storage/       # 数据层
-│   │   └── config/        # 配置管理
-│   └── tests/             # 测试
+│   │   ├── ai/            # AI 层：ToolProvider（Python 原生工具）、Agent Executor、Skills、模型路由
+│   │   ├── scheduling/    # 调度层（空桩，待实现）
+│   │   ├── storage/       # 数据层：SQLite 初始化、SQLModel 模型、Repository
+│   │   ├── setup/         # 设置向导：QR 注册、凭证验证
+│   │   ├── config/        # 配置管理：Pydantic 模型 + YAML 加载
+│   │   ├── __main__.py    # CLI 入口：teamflow setup/run/reset 子命令
+│   │   └── main.py        # 核心 async main()：初始化 DB、启动订阅进程、事件循环
+│   └── tests/             # 测试（目录和文件尚未创建）
 ├── hermes-agent/          # 参考实现（不直接引用）
 ├── config.example.yaml    # 配置示例
-└── TODO.md                # 开发路线清单
+└── TODO.md                # 开发路线清单（按 M0→M4 排列，标记完成状态）
 ```
+
+## 核心源文件
+
+**启动与入口：**
+- `src/teamflow/__main__.py` — CLI 入口：`teamflow setup`（设置向导）、`teamflow run`（启动主循环）、`teamflow reset`（清理数据）
+- `src/teamflow/main.py` — 核心异步主循环：加载配置 → 初始化数据库 → 启动 lark-cli 事件订阅子进程 → 卡片回调 WebSocket → EventFileWatcher → EventDispatcher → 健康检查 HTTP server（`127.0.0.1:9090/health`）
+
+**接入层 (`access/`)：**
+- `parser.py` — `FeishuEvent`/`CardActionData` 数据类，NDJSON 解析、bot 消息过滤、字段提取
+- `watcher.py` — `EventFileWatcher`：轮询 NDJSON 文件目录，跟踪文件偏移，新行回调
+- `dispatcher.py` — `EventDispatcher`：按事件类型注册 handler，event_id 内存去重（上限 10000）
+- `callback.py` — 基于 `lark-oapi` SDK 的 WebSocket 客户端，接收卡片交互回调，路由到 `CommandRouter`
+
+**编排层 (`orchestration/`)：**
+- `command_router.py` — `CommandRouter`：文本消息路由（help/创建项目 触发词），会话状态恢复
+- `project_flow.py` — `ProjectCreateFlow`：3 状态状态机（collecting_project_name → collecting_repo → creating_project），支持文本对话和卡片表单
+- `event_bus.py` — `EventBus`：内部发布/订阅，idempotency_key 去重，EventLog 持久化
+- `card_templates.py` — 飞书卡片 JSON 模板工厂：welcome、project_created、project_create_form、project_failed
+
+**执行层 (`execution/`)：**
+- `cli.py` — `CLIResult` 数据类、`find_cli_binary()`、tenant_access_token 缓存交换（提前 60s 刷新）、`run_cli()` subprocess 封装
+- `messages.py` — 便捷发送函数：`send_text()`、`send_card()`、`send_markdown()`、`create_chat()`、`add_chat_members()`
+
+**数据层 (`storage/`)：**
+- `models.py` — 四个 SQLModel 表：`Project`、`ConversationState`、`EventLog`、`ActionLog`（全部 UUID 主键、UTC 时间戳）
+- `repository.py` — 四个 Repository 类：`ProjectRepo`、`ConversationStateRepo`、`EventLogRepo`、`ActionLogRepo`
+- `database.py` — `init_db()`（SQLite，路径 `data/teamflow.db` 或 `TEAMFLOW_DB_PATH` 环境变量）、`get_session()` 上下文管理器
+
+**配置 (`config/`)：**
+- `settings.py` — Pydantic `FeishuConfig`（app_id、app_secret、brand、admin_open_id）和 `TeamFlowConfig`。`load_config()` 从 `config.yaml` 加载，支持环境变量覆盖。
+
+**设置向导 (`setup/`)：**
+- `cli.py` — 交互式 CLI：检查 lark-cli → 可选 npm 安装 → QR 注册或手动输入凭证 → 写入 config.yaml
+- `feishu.py` — 飞书 OAuth device-code 流程：`qr_register()` 自动创建应用，`probe_bot()` 验证凭证
+
+**`ai/`** — Agent 智能通道（Agent 基础设施已实现，端到端验证待真实凭证）：
+- `models.py` — `AgentTask`/`AgentResult` 数据类 + `MODEL_ROUTING` 模型路由配置
+- `tools/` — `ToolProvider`：注册 Python 异步函数为 Agent 工具（零外部进程），含飞书 API 工具（`feishu.py`）
+- `agent.py` — `AgentExecutor`：LiteLLM tool-use 循环（系统提示词 → LLM → 工具调用 → 追加结果 → 循环直到完成或 max_iterations）
+- `prompts.py` — 系统提示词管理（`WORKSPACE_INIT_PROMPT` 等，向后兼容）
+- `skills/` — Agent 技能系统：插件式 `Skill` 注册 + `SkillRegistry` 全局注册表，支持触发器匹配（子字符串/正则），`workspace_init` 技能已内置
+
+**`scheduling/`** 包当前只有空的 `__init__.py`，尚未实现。
 
 ## 架构设计
 
@@ -63,7 +134,7 @@ teamflow/
 Python 主进程
 ├── 接入层 — 消费 CLI 事件订阅进程的 NDJSON 输出、指令解析、消息路由
 ├── 业务编排层 — 状态机、事件分发、流程编排、双通道调度（不直接调用飞书 API）
-├── AI 层 — LiteLLM tool-use 循环、MCP 客户端、提示词管理、降级策略
+├── AI 层 — LiteLLM tool-use 循环、MCP 客户端、提示词管理、降级策略（待实现）
 │
 │  双通道执行 ↓
 │
@@ -72,7 +143,7 @@ Python 主进程
 │   ├── CLI 日志捕获 — stderr 结构化日志解析
 │   └── 事件订阅 — 长驻进程 WebSocket → NDJSON → 文件输出
 │
-└── 智能通道 (Agent + @larksuiteoapi/lark-mcp MCP Server)
+└── 智能通道 (Agent + @larksuiteoapi/lark-mcp MCP Server)（待实现）
     ├── MCP Client (Python mcp SDK, stdio transport)
     └── Agent executor — LiteLLM tool-use 循环，动态发现和调用飞书工具
 ```
@@ -89,18 +160,18 @@ Python 主进程
 
 Project、Member、Task、ConversationState、EventLog、ActionLog、Observation、Decision。完整字段定义见 `docs/prd/02-data-and-event-model.md`。
 
-### 关键状态枚举
+### 关键状态枚举（定义于 `src/teamflow/core/enums.py`）
 
 - **Project.status**: `creating` → `created` → `initializing_workspace` → `active` / `failed` / `archived`
-- **workspace_status**: `pending` → `running` → `succeeded` / `partial_failed` / `failed`
-- **Task.status**: `todo` / `in_progress` / `blocked` / `done` / `cancelled`
-- **Decision.autonomy_level**: `auto` / `approval` / `forbidden`
+- **WorkspaceStatus**: `pending` → `running` → `succeeded` / `partial_failed` / `failed`
+- **EventStatus**: `pending` / `processing` / `succeeded` / `failed` / `ignored`
+- **ActionResult**: `success` / `failure`
 
 ### 事件驱动
 
 所有内部事件必须带 `idempotency_key`。核心事件：`project.created`、`project.workspace_initialized`、`task.overdue`、`task.blocked`、`task.stale`、`schedule.daily_standup`、`schedule.weekly_report`。
 
-### AI 模型层级
+### AI 模型层级（规划中，尚未实现）
 
 - `fast`：简单摘要、命令响应
 - `smart`：风险分析、周报、站会摘要
@@ -108,15 +179,16 @@ Project、Member、Task、ConversationState、EventLog、ActionLog、Observation
 
 ## 里程碑
 
-| 里程碑 | 目标 | 模块 PRD |
-|--------|------|----------|
-| M0 | 飞书交互链路打通 | `modules/05-platform-and-observability.md` |
-| M1 | 项目创建可用 | `modules/01-project-entry-and-onboarding.md` |
-| M2 | 飞书工作空间初始化 | `modules/02-feishu-workspace.md` |
-| M3 | 项目运行与协作 | `modules/03-project-operations-and-collaboration.md` |
-| M4 | AI 能力增强 | `modules/04-ai-analysis-and-decision.md` |
+| 里程碑 | 目标 | 状态 |
+|--------|------|------|
+| M0 | 飞书交互链路打通 | 已完成 |
+| M1 | 项目创建可用 | 已完成 |
+| Agent 基础设施 | MCP Server/Client、Agent Executor | 未开始 |
+| M2 | 飞书工作空间初始化 | 未开始 |
+| M3 | 项目运行与协作 | 未开始 |
+| M4 | AI 能力增强 | 未开始 |
 
-开发时必须按 M0→M4 顺序推进，验收标准见 `docs/prd/03-acceptance-checklist.md`。
+开发时必须按 M0→M4 顺序推进，验收标准见 `docs/prd/03-acceptance-checklist.md`。`TODO.md` 中有逐项完成状态的详细清单。
 
 ## 产品原则（开发决策依据）
 
@@ -134,6 +206,9 @@ Project、Member、Task、ConversationState、EventLog、ActionLog、Observation
 - 脱敏：App Secret、访问令牌、模型 API Key 不得写入日志或业务表
 - 单步失败隔离：部分步骤失败不遮蔽已成功结果，不回滚已创建的外部资源
 - 定时调度幂等：以项目 ID + 日期/周编号作为幂等维度，多实例部署不重复执行
+- 数据库文件 `data/teamflow.db` 由 SQLite 自动创建，路径可通过 `TEAMFLOW_DB_PATH` 环境变量覆盖
+- 事件订阅进程 `lark-cli event +subscribe` 为长驻子进程，main.py 主循环监控其存活状态
+- 卡片回调通过 `lark-oapi` SDK 的 WebSocket 客户端在独立 daemon 线程中接收
 
 ## cli 子目录
 

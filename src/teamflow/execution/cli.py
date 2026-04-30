@@ -3,13 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import platform
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from teamflow.config import FeishuConfig

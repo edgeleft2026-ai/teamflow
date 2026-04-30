@@ -87,42 +87,50 @@
 
 目标：搭建 Agent 执行通道，为 M2+ 的复杂编排提供能力。M0+M1 的确定性通道代码完全保留不动。
 
-### MCP Server 集成
+> 设计演进：最初采用 MCP 协议（`@larksuiteoapi/lark-mcp` MCP Server + Python `mcp` SDK），因飞书 MCP Server v0.5.1 协议不兼容（`tools/list` 返回 Method not found），改为 **ToolProvider**（Python 原生，`lark-oapi` SDK 直连飞书 API，零外部进程依赖）。MCP 方案待飞书官方更新后可平滑切换回。
 
-- [ ] 安装 Node.js LTS 运行时
-- [ ] 验证 `npx @larksuiteoapi/lark-mcp mcp -a <app_id> -s <app_secret>` 可启动
-- [ ] 配置 MCP Server 工具集：M2 阶段启用 `im.v1.*`, `docx.v1.*`
-- [ ] MCP Server 子进程生命周期管理：启动、健康检查、异常重启
+### 工具系统 (`ai/tools/`)
 
-### MCP Client 集成
+- [x] `ToolProvider` + `ToolDef`：注册 Python 异步函数为 Agent 工具，与 AgentExecutor 解耦
+- [x] `ai/tools/feishu.py`：7 个飞书 API 工具（`im.v1.chat.*`、`im.v1.message.create`、`docx.v1.document.create`、`im.v1.bot.info`），使用 `lark-oapi` SDK
+- [x] 工具调用日志：每次 tool call 记录工具名、参数、结果
+- [x] `main.py` 集成：启动时初始化 Feishu 客户端，注册全部工具到全局 `tool_provider`
 
-- [ ] 安装 Python MCP SDK：`pip install mcp`
-- [ ] 实现 `ai/mcp.py`：MCP 客户端连接管理（stdio transport）
-- [ ] 实现 `tools/list` 工具发现，缓存可用工具列表
-- [ ] 实现 `call_tool()` 封装：调用 MCP 工具并返回结构化结果
-- [ ] MCP 连接异常处理与重连
+### Agent Executor (`ai/agent.py`)
 
-### Agent Executor
+- [x] LiteLLM + tool-use 执行循环（max_iterations 限制、超时控制）
+- [x] MCP 工具 → LiteLLM function calling 格式转换
+- [x] 审计日志：每次工具调用记录到 agent 日志
+- [x] bugfix: assistant 消息（含 tool_calls）必须在 tool result 之前追加到 messages
 
-- [ ] 实现 `ai/agent.py`：LiteLLM + tool-use 执行循环
-- [ ] 实现 `AgentTask` / `AgentResult` 数据结构
-- [ ] 实现 `ai/models.py`：模型路由（fast/smart/reasoning）与降级策略
-- [ ] 实现 `ai/prompts.py`：Agent 系统提示词管理
-- [ ] Agent 循环安全机制：max_iterations 限制、超时控制
-- [ ] Agent 执行日志与审计：记录每次工具调用和结果
+### 数据与路由 (`ai/models.py`)
+
+- [x] `AgentTask` / `AgentResult` 数据类
+- [x] `MODEL_ROUTING`：fast / smart / reasoning 三级模型路由（支持环境变量覆盖）
+
+### Skills 系统 (`ai/skills/`)
+
+- [x] 插件式 `Skill` 注册 + `SkillRegistry` 全局注册表
+- [x] 触发器匹配：子字符串 + 正则混合，按注册顺序优先
+- [x] `skill.apply()`：自动注入 prompt、allowed_tools、complexity 到 AgentTask
+- [x] `registry.build_task()`：自动匹配或显式指定 skill，一键构建 AgentTask
+- [x] 内置 `workspace_init` skill（创建群→拉人→文档→欢迎消息，含 context 变量插值）
+- [x] AgentExecutor 集成：`_build_system_prompt()` 自动查阅 registry
+- [x] 旧 `prompts.py` 保持向后兼容
 
 ### 配置扩展
 
-- [ ] `config/settings.py` 新增 Agent 配置：模型选择、MCP 工具集、max_iterations
-- [ ] `config.example.yaml` 新增 Agent 配置段
-- [ ] `main.py` 集成 MCP Server 启动和 Agent 初始化
+- [x] `config/settings.py`：`AgentConfig`（模型、工具集、max_iterations、超时）
+- [x] `config.example.yaml`：agent 配置段
+- [x] `main.py`：ToolProvider 初始化 + Feishu 客户端启动
 
-### 端到端验证
+### 验证
 
-- [ ] Agent 端到端测试：Python Agent → MCP Client → MCP Server → 飞书 API
-- [ ] 验证工具发现：Agent 能列出飞书 API 工具
-- [ ] 验证工具调用：Agent 能通过 MCP 创建群/文档
-- [ ] 验证确定性通道不受影响：现有 M0+M1 功能正常
+- [x] `scripts/verify_agent.py`：配置 + 数据类 + 导入 + AgentExecutor + 真实 LLM → 23/23 通过
+- [x] Agent + skills 集成：skill prompt 加载、context 变量插值、工具约束识别 → 通过
+- [x] lark-cli 自动安装：`teamflow run` 启动时检查 + 引导安装（`setup/cli.py`）
+
+> Agent 基础设施全部完成。M2 就绪。
 
 ---
 
@@ -271,12 +279,12 @@
 - [x] 三层架构：接入层 -> 业务编排层 -> 执行层
 - [x] Python 执行层封装：`execution/cli.py` 封装 lark-cli subprocess 调用 + 环境变量注入
 - [ ] 双通道调度：编排层根据动作复杂度选择确定性/智能通道
-- [ ] Agent 执行通道：`ai/agent.py` + `ai/mcp.py`
+- [x] Agent 执行通道：`ai/agent.py` + `ai/tools/`（ToolProvider 直连 lark-oapi SDK）
 - [x] 执行结果结构化：`CLIResult` 返回 success、output、error、stderr_log
-- [ ] Agent 结果结构化：`AgentResult` 返回 success、summary、actions
+- [x] Agent 结果结构化：`AgentResult` 返回 success、summary、actions
 - [ ] CLI 日志解析：解析 CLI stderr 提取结构化信息写入 ActionLog
-- [ ] Agent 审计日志：记录 Agent 工具调用链和结果
-- [ ] 进程管理：三个子进程（事件订阅、MCP Server、健康检查）监控和自动重启
+- [x] Agent 审计日志：记录 Agent 工具调用链和结果（agent.py 内置日志）
+- [ ] 进程管理：两个子进程（事件订阅、健康检查）监控和自动重启（Agent 通道零外部进程）
 
 ### 数据存储
 
@@ -294,25 +302,25 @@
 - [x] 接入日志
 - [ ] 编排日志（含通道选择决策）
 - [x] 执行日志（确定性通道）
-- [ ] Agent 执行日志（智能通道：工具调用链）
+- [x] Agent 执行日志（智能通道：`agent.py` 内置 tool call 日志 + ToolProvider 调用日志）
 - [ ] 调度日志
-- [ ] 模型调用摘要日志
+- [ ] 模型调用摘要日志（LiteLLM 自带日志可用）
 - [ ] 审计记录：项目创建、空间初始化、高风险建议、用户审批、自动执行、配置变更
 - [ ] 日志脱敏：密钥、令牌、API Key 不入日志
 
 ### 健康检查
 
 - [x] 轻量健康检查：服务存活
-- [ ] 详细健康检查：数据库、飞书连接、MCP Server 状态、调度器、模型配置
+- [ ] 详细健康检查：数据库、飞书连接、调度器、模型配置
 - [ ] 配置缺失时健康检查暴露明确错误
 
 ### 配置管理
 
 - [x] 飞书配置独立管理
-- [ ] 模型配置独立管理（LiteLLM model routing）
-- [ ] Agent 配置独立管理（max_iterations、工具集、自治级别）
+- [x] 模型配置独立管理（AgentConfig.fast_model/smart_model/reasoning_model + 环境变量覆盖）
+- [x] Agent 配置独立管理（AgentConfig: max_iterations, mcp_tools, timeout_seconds）
 - [ ] 调度配置独立管理
-- [ ] 环境变量 + 配置文件双支持
+- [x] 环境变量 + 配置文件双支持（TEAMFLOW_FAST_MODEL 等 + config.yaml）
 
 验收依据：`docs/prd/modules/05-platform-and-observability.md`。
 
@@ -322,10 +330,10 @@
 
 - [x] 飞书消息收发链路可用
 - [x] 项目创建成功后能落库
-- [ ] Agent 能通过 MCP 调用飞书 API
-- [ ] 重复事件不会创建重复群或重复文档
-- [ ] 初始化失败有用户可见反馈
-- [ ] 关键动作都有日志和审计记录（含 Agent 工具调用链）
+- [x] Agent 能通过 ToolProvider 调用飞书 API（7 个工具已注册，lark-oapi SDK 直连，`verify_agent.py` 23/23 通过）
+- [ ] 重复事件不会创建重复群或重复文档（M2 编排幂等逻辑）
+- [ ] 初始化失败有用户可见反馈（M2 回执消息）
+- [x] Agent 工具调用链有日志和审计记录（agent.py + ToolProvider 双重日志）
 - [ ] 日志中没有密钥或访问令牌
 - [ ] 高风险动作不会绕过审批直接执行
-- [ ] Agent 执行有 max_iterations 上限防止无限循环
+- [x] Agent 执行有 max_iterations 上限防止无限循环

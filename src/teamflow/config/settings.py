@@ -14,8 +14,20 @@ class FeishuConfig(BaseModel):
     admin_open_id: str = ""
 
 
+class AgentConfig(BaseModel):
+    """Agent configuration for the AI/smart channel."""
+
+    mcp_tools: str = "im.v1.*,docx.v1.*"
+    max_iterations: int = 10
+    timeout_seconds: int = 120
+    fast_model: str = "openai/gpt-4o-mini"
+    smart_model: str = "openai/gpt-4o"
+    reasoning_model: str = "openai/gpt-4o"
+
+
 class TeamFlowConfig(BaseModel):
     feishu: FeishuConfig
+    agent: AgentConfig = AgentConfig()
 
 
 def load_config(path: Path | str | None = None) -> TeamFlowConfig:

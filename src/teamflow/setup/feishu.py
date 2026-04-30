@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from http.client import HTTPResponse
-from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -55,7 +53,8 @@ def _init_registration(domain: str) -> None:
     res = _post_registration(base_url, {"action": "init"})
     methods = res.get("supported_auth_methods") or []
     if "client_secret" not in methods:
-        raise RuntimeError(f"Registration does not support client_secret auth. Supported: {methods}")
+        msg = f"Registration does not support client_secret auth. Supported: {methods}"
+        raise RuntimeError(msg)
 
 
 def _begin_registration(domain: str) -> dict:
@@ -225,7 +224,7 @@ def qr_register(*, initial_domain: str = "feishu") -> dict | None:
         return None
 
     qr_url = reg["qr_url"]
-    print(f"\n  Scan the QR code below with your Feishu/Lark mobile app:")
+    print("\n  Scan the QR code below with your Feishu/Lark mobile app:")
     print(f"  (Or open: {qr_url})\n")
     if not _render_qr(qr_url):
         print(f"  URL: {qr_url}\n")

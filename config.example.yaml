@@ -6,3 +6,12 @@ feishu:
   app_secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   brand: "feishu"  # "feishu" for China, "lark" for international
   admin_open_id: ""  # Optional: your Feishu open_id for startup notification
+
+# Agent / AI configuration (M2+)
+agent:
+  mcp_tools: "im.v1.*,docx.v1.*"  # MCP tools to enable (comma-separated)
+  max_iterations: 10               # Max tool-use loop iterations
+  timeout_seconds: 120             # Agent task timeout
+  fast_model: "openai/gpt-4o-mini" # Model for simple tasks
+  smart_model: "openai/gpt-4o"     # Model for analysis and reports
+  reasoning_model: "openai/gpt-4o" # Model for complex reasoning

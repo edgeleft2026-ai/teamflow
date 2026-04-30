@@ -52,7 +52,7 @@ def _cmd_setup() -> None:
 
 def _cmd_run() -> None:
     """启动应用，配置缺失时自动进入设置向导。"""
-    from teamflow.setup.cli import ensure_config, _check_lark_cli, _install_lark_cli_guide
+    from teamflow.setup.cli import _check_lark_cli, _install_lark_cli_guide, ensure_config
 
     # 先检查 lark-cli 环境
     lark_cli_path = _check_lark_cli()
