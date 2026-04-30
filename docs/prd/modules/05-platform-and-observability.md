@@ -8,10 +8,10 @@
 
 ### 2.1 本模块负责
 
-1. 飞书事件接入。
+1. 飞书事件接入（NDJSON 文件监听 + WebSocket 卡片回调）。
 2. 消息路由基础设施。
 3. 内部事件总线。
-4. 动作执行层封装。
+4. 动作执行层封装（双通道：确定性 + Agent）。
 5. 数据存储。
 6. 定时调度。
 7. 运行日志。
@@ -47,10 +47,12 @@
 
 必须支持：
 
-1. Webhook 或 WebSocket 接入。
-2. 私聊消息接收。
-3. 群消息接收。
-4. 简单卡片动作接收。
+1. NDJSON 文件监听接入（lark-cli event +subscribe 长驻进程输出）。
+2. WebSocket 卡片交互回调接入（lark-oapi WebSocket 长连接）。
+3. 私聊消息接收。
+4. 群消息接收。
+5. 卡片动作事件接收（card.action.trigger）。
+6. 卡片表单数据解析。
 
 ### 4.2 消息治理
 
@@ -86,20 +88,21 @@
 
 ## 6. 执行层要求
 
-执行层采用**双通道架构**：确定性通道（lark-cli subprocess）和智能通道（Agent + MCP）。
+执行层采用**双通道架构**：确定性通道（lark-oapi SDK / lark-cli subprocess）和智能通道（Agent + ToolProvider）。
 
 ### 6.1 确定性通道
 
 ```text
 Python 主进程
-  → execution 模块构建 CLI 命令和参数
-  → subprocess.run(["lark-cli", ...])
+  → execution 模块构建 SDK 调用或 CLI 命令
+  → lark-oapi SDK 直连调用（消息发送、卡片更新等）
+  → 或 subprocess.run(["lark-cli", ...])
   → 解析 stdout JSON 输出（业务结果）
   → 捕获 stderr 日志
   → 返回 CLIResult(success, output, error, stderr_log)
 ```
 
-适用场景：发消息、拉人入群、事件订阅等高频确定性动作。
+适用场景：发消息、拉人入群、卡片更新、事件订阅等高频确定性动作。
 
 ### 6.2 智能通道
 
@@ -107,26 +110,31 @@ Python 主进程
 Python 主进程
   → 编排层构建 AgentTask(description, context, complexity)
   → Agent Executor (LiteLLM tool-use 循环)
-    → MCP Client → @larksuiteoapi/lark-mcp → 飞书 API
+    → ToolProvider → lark-oapi SDK → 飞书 API
+    → 或 lark_cli.run → lark-cli subprocess → 飞书 API
+    → Transport 归一化响应
   → 返回 AgentResult(success, summary, actions, data)
 ```
 
 适用场景：工作空间初始化、报告生成、风险分析等多步编排。
 
-Agent 通过 MCP `tools/list` 动态发现可用工具，通过 `-t` 参数按里程碑启用工具集。
+Agent 通过 ToolProvider 注册的工具调用飞书 API，通过 `allowed_tools` 白名单约束可用工具。
 
 ### 6.3 通道选择
 
 编排层根据动作复杂度选择通道：参数完全确定的单步调用走确定性通道，多步编排或需要 AI 判断的走智能通道。默认确定性通道，降级安全。
 
-### 6.4 确定性通道命令映射
+### 6.4 确定性通道动作映射
 
-| 业务动作 | CLI 命令 | 说明 |
-|----------|----------|------|
-| 发送消息 | `im +messages-send` | 支持 --chat-id / --user-id、--text / --markdown |
-| 拉人入群 | `im +chat-members-add` | — |
-| 获取群链接 | `im +chat-link` | — |
-| 订阅事件 | `event +subscribe` | 长驻进程，--output-dir、--route |
+| 业务动作 | 技术 | 说明 |
+|----------|------|------|
+| 发送文本消息 | lark-oapi SDK | `client.im.v1.message.create()` |
+| 发送卡片消息 | lark-oapi SDK | `client.im.v1.message.create(msg_type="interactive")` |
+| 更新卡片消息 | lark-oapi SDK | `client.im.v1.message.patch()` |
+| 拉人入群 | lark-oapi SDK | `client.im.v1.chat_member.create()` |
+| 获取群链接 | lark-oapi SDK | `client.im.v1.chat.get()` |
+| 订阅事件 | lark-cli subprocess | 长驻进程，--output-dir、--route |
+| 通用 CLI 命令 | lark-cli subprocess | lark_cli.run ToolProvider 工具 |
 
 ### 6.5 统一结果格式
 
@@ -181,13 +189,14 @@ lark-cli event +subscribe \
 第一阶段最小数据对象：
 
 1. Project。
-2. Member。
-3. Task。
-4. ConversationState。
-5. EventLog。
-6. ActionLog。
-7. Observation。
-8. Decision。
+2. ProjectFormSubmission。
+3. ConversationState。
+4. EventLog。
+5. ActionLog。
+6. Member。
+7. Task。
+8. Observation。
+9. Decision。
 
 数据原则：
 

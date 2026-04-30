@@ -134,7 +134,41 @@
 5. `created`
 6. `failed`
 
-### 3.7 EventLog
+### 3.7 ProjectFormSubmission
+
+用于持久化卡片表单创建流程的提交记录和进度追踪。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| id | string | 是 | 记录 ID |
+| request_id | string | 是 | 卡片回调 request_id（唯一，用于去重） |
+| open_id | string | 是 | 提交用户 open_id |
+| chat_id | string | 是 | 飞书会话 ID |
+| open_message_id | string | 是 | 卡片消息 ID（用于更新进度卡片） |
+| project_name | string | 是 | 项目名称 |
+| git_repo_path | string | 是 | Git 仓库地址或本地路径 |
+| status | enum | 是 | 提交处理状态 |
+| current_step | string | 是 | 当前步骤描述 |
+| steps_payload | json | 是 | 各步骤执行结果 |
+| project_id | string | 否 | 关联项目 ID（创建成功后填入） |
+| error_message | string | 否 | 错误信息 |
+| created_at | datetime | 是 | 创建时间 |
+| updated_at | datetime | 是 | 更新时间 |
+
+`status` 值：
+
+1. `pending`：表单已提交，等待处理。
+2. `creating_project`：项目创建中。
+3. `initializing_workspace`：协作空间初始化中。
+4. `succeeded`：全部完成。
+5. `partial_failed`：部分步骤失败。
+6. `failed`：处理失败。
+
+推荐唯一约束：
+
+1. `request_id` 唯一（防止重复表单提交）。
+
+### 3.8 EventLog
 
 用于记录业务事件和处理状态。
 
@@ -159,7 +193,7 @@
 4. `failed`
 5. `ignored`
 
-### 3.8 ActionLog
+### 3.9 ActionLog
 
 用于记录外部动作执行结果。
 
@@ -177,7 +211,7 @@
 | created_at | datetime | 是 | 创建时间 |
 | finished_at | datetime | 否 | 完成时间 |
 
-### 3.9 Observation
+### 3.10 Observation
 
 用于记录扫描、提醒和报告结果。
 
@@ -203,7 +237,7 @@
 6. `weekly_report`
 7. `risk_analysis`
 
-### 3.10 Decision
+### 3.11 Decision
 
 用于记录规则、策略或 AI 生成的建议和动作。
 
@@ -355,6 +389,8 @@
 4. 创建项目文档前先检查项目记录是否已有 `feishu_doc_url`。
 5. 提醒类消息使用 `dedupe_key` 控制重复发送。
 6. 定时报告以项目 ID 和日期或周编号作为幂等维度。
+7. 卡片表单提交用 `request_id` 去重，重复提交返回当前状态卡片。
+8. 协作空间初始化用 `workspace_status` 检查，`succeeded` 或 `partial_failed` 时跳过重复执行。
 
 ## 6. 脱敏规则
 
