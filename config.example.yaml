@@ -17,3 +17,10 @@ agent:
   fast_model: "openai/gpt-4o-mini" # Model for simple tasks
   smart_model: "openai/gpt-4o"     # Model for analysis and reports
   reasoning_model: "openai/gpt-4o" # Model for complex reasoning
+
+# Gitea (self-hosted Git service) configuration
+gitea:
+  base_url: "https://git.lighter.games"  # Your Gitea instance URL
+  access_token: ""                        # Gitea access token (Settings > Applications > Access Tokens)
+  default_private: true                   # Create private repos by default
+  auto_create: true                       # Auto-create repo when git_repo_path is not provided

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from teamflow.config import FeishuConfig
+from teamflow.config.settings import GiteaConfig, TeamFlowConfig
 from teamflow.execution.messages import send_card
 from teamflow.orchestration.card_templates import project_create_form_card, welcome_card
 from teamflow.orchestration.event_bus import EventBus
@@ -21,8 +22,9 @@ _CREATE_TRIGGERS = {"开始创建项目", "创建项目", "新建项目", "creat
 
 
 class CommandRouter:
-    def __init__(self, feishu: FeishuConfig) -> None:
+    def __init__(self, feishu: FeishuConfig, gitea_config: GiteaConfig | None = None) -> None:
         self.feishu = feishu
+        self.gitea_config = gitea_config or GiteaConfig()
 
     def handle(self, text: str, open_id: str, chat_id: str) -> None:
         """处理一条用户消息，路由到对应的处理器。"""
@@ -31,7 +33,7 @@ class CommandRouter:
         with get_session() as session:
             conv_repo = ConversationStateRepo(session)
             event_bus = EventBus(session)
-            flow = ProjectCreateFlow(self.feishu, session, event_bus)
+            flow = ProjectCreateFlow(self.feishu, session, event_bus, self.gitea_config)
 
             # 优先检查是否有活跃的创建流程
             active_conv = conv_repo.get_active(open_id)
@@ -61,7 +63,7 @@ class CommandRouter:
 
         with get_session() as session:
             event_bus = EventBus(session)
-            flow = ProjectCreateFlow(self.feishu, session, event_bus)
+            flow = ProjectCreateFlow(self.feishu, session, event_bus, self.gitea_config)
 
             if teamflow_action == "submit_project_form":
                 return flow.submit_form(card_data)

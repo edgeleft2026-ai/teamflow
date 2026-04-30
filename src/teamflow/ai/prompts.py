@@ -22,6 +22,7 @@ Execute the following steps in order. After each step, check the result before p
 4. **Create a project document** using `docx.v1.document.create`.
    - Title: "{project_name} - 项目文档"
    - Content should include: project name, admin, git repo ({git_repo_path}), and creation date.
+   - If git_repo_path is empty or "自动创建中", note it as "仓库待关联" instead.
 
 5. **Send a welcome message to the group** using `im.v1.message.create`.
    - Greet the team and explain the purpose of this group.

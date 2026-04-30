@@ -22,7 +22,7 @@ class ProjectRepo:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def create(self, name: str, git_repo_path: str, admin_open_id: str) -> Project:
+    def create(self, name: str, git_repo_path: str | None, admin_open_id: str) -> Project:
         project = Project(
             name=name,
             git_repo_path=git_repo_path,
@@ -55,6 +55,9 @@ class ProjectRepo:
         feishu_doc_url: str | None = None,
         workspace_status: str | None = None,
         status: str | None = None,
+        git_repo_path: str | None = None,
+        git_repo_platform: str | None = None,
+        git_repo_auto_created: bool | None = None,
     ) -> Project | None:
         project = self.get_by_id(project_id)
         if project:
@@ -68,6 +71,12 @@ class ProjectRepo:
                 project.workspace_status = workspace_status
             if status is not None:
                 project.status = status
+            if git_repo_path is not None:
+                project.git_repo_path = git_repo_path
+            if git_repo_platform is not None:
+                project.git_repo_platform = git_repo_platform
+            if git_repo_auto_created is not None:
+                project.git_repo_auto_created = git_repo_auto_created
             project.updated_at = datetime.now(UTC)
             self.session.add(project)
             self.session.flush()
@@ -155,7 +164,7 @@ class ProjectFormSubmissionRepo:
         chat_id: str,
         open_message_id: str,
         project_name: str,
-        git_repo_path: str,
+        git_repo_path: str | None,
         status: str,
         current_step: str,
         steps: list[dict],

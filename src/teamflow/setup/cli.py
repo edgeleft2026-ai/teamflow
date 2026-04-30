@@ -78,7 +78,6 @@ def _prompt_credential(provider_id: str) -> None:
     借鉴 hermes-agent _model_flow_api_key_provider() 的凭证处理流程。
     保存时使用 LiteLLM 能识别的环境变量名和 base URL。
     """
-    import getpass
 
     from teamflow.ai.model_registry import (
         get_litellm_base_url_override,
@@ -116,7 +115,12 @@ def _prompt_credential(provider_id: str) -> None:
     print(f"  (获取地址请查阅 {entry.label} 官方文档)")
     print()
     try:
-        new_key = getpass.getpass(f"  请输入 {litellm_env} (输入不可见，回车取消): ").strip()
+        new_key = questionary.password(
+            f"请输入 {litellm_env}（输入不可见）：",
+            style=_CUSTOM_STYLE,
+        ).ask()
+        if new_key is not None:
+            new_key = new_key.strip()
     except (KeyboardInterrupt, EOFError):
         print("\n  已取消。将跳过 API Key 设置。")
         return
@@ -156,6 +160,10 @@ def _save_config(
     api_mode: str = "",
     max_iterations: int = 10,
     timeout_seconds: int = 120,
+    gitea_base_url: str = "",
+    gitea_access_token: str = "",
+    gitea_default_private: bool = True,
+    gitea_auto_create: bool = True,
 ) -> None:
     config = {
         "feishu": {
@@ -174,6 +182,13 @@ def _save_config(
             "timeout_seconds": timeout_seconds,
         },
     }
+    if gitea_base_url or gitea_access_token:
+        config["gitea"] = {
+            "base_url": gitea_base_url,
+            "access_token": gitea_access_token,
+            "default_private": gitea_default_private,
+            "auto_create": gitea_auto_create,
+        }
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
@@ -483,6 +498,107 @@ def _llm_setup() -> tuple[str, str, str, str] | None:
     return (provider_id, fast_model, smart_model, reasoning_model)
 
 
+def _gitea_setup() -> dict | None:
+    """Interactive Gitea configuration.
+
+    Returns a dict with gitea config keys or None if skipped.
+    """
+    print()
+    print("-" * 50)
+    print("  Gitea 代码仓库配置")
+    print("-" * 50)
+    print("  配置 Gitea 后，创建项目时可自动创建代码仓库。")
+    print("  如不配置，创建项目时需手动输入仓库地址。")
+    print()
+
+    do_configure = questionary.confirm(
+        "是否配置 Gitea？（可跳过，后续手动编辑 config.yaml）",
+        default=False,
+        style=_CUSTOM_STYLE,
+    ).ask()
+    if not do_configure:
+        return None
+
+    base_url = questionary.text(
+        "Gitea 服务地址：",
+        default="https://git.lighter.games",
+        style=_CUSTOM_STYLE,
+    ).ask()
+    if not base_url:
+        return None
+    base_url = base_url.rstrip("/")
+
+    access_token = questionary.password(
+        "Access Token（输入不可见）：",
+        style=_CUSTOM_STYLE,
+    ).ask()
+    if not access_token:
+        print("  未输入 Token，跳过 Gitea 配置。")
+        return None
+
+    default_private = questionary.confirm(
+        "默认创建私有仓库？",
+        default=True,
+        style=_CUSTOM_STYLE,
+    ).ask()
+
+    auto_create = questionary.confirm(
+        "项目创建时自动创建仓库？（未填写仓库地址时）",
+        default=True,
+        style=_CUSTOM_STYLE,
+    ).ask()
+
+    print("\n  正在验证 Gitea 连接...")
+    try:
+        import asyncio
+
+        from teamflow.config.settings import GiteaConfig
+        from teamflow.git.gitea_service import GiteaService
+
+        cfg = GiteaConfig(base_url=base_url, access_token=access_token)
+        svc = GiteaService(cfg)
+
+        async def _validate():
+            valid = await svc.check_token()
+            username = ""
+            if valid:
+                user = await svc.get_current_user()
+                username = user.username
+            await svc.close()
+            return valid, username
+
+        valid, username = asyncio.run(_validate())
+        if valid:
+            print(f"  ✓ 连接成功，用户: {username}")
+        else:
+            print("  ✗ Token 验证失败，请检查地址和 Token。")
+            retry = questionary.confirm(
+                "是否重新输入？",
+                default=True,
+                style=_CUSTOM_STYLE,
+            ).ask()
+            if retry:
+                return _gitea_setup()
+            return None
+    except Exception as exc:
+        print(f"  ✗ 连接失败: {exc}")
+        retry = questionary.confirm(
+            "是否重新输入？",
+            default=True,
+            style=_CUSTOM_STYLE,
+        ).ask()
+        if retry:
+            return _gitea_setup()
+        return None
+
+    return {
+        "base_url": base_url,
+        "access_token": access_token,
+        "default_private": default_private,
+        "auto_create": auto_create,
+    }
+
+
 def setup(config_path: Path | None = None) -> dict | None:
     """运行 TeamFlow 设置向导。返回配置信息或 None。"""
     if config_path is None:
@@ -552,6 +668,18 @@ def setup(config_path: Path | None = None) -> dict | None:
     if llm is not None:
         agent_provider, fast_model, smart_model, reasoning_model = llm
 
+    # Gitea 代码仓库设置
+    gitea = _gitea_setup()
+    gitea_base_url = ""
+    gitea_access_token = ""
+    gitea_default_private = True
+    gitea_auto_create = True
+    if gitea is not None:
+        gitea_base_url = gitea["base_url"]
+        gitea_access_token = gitea["access_token"]
+        gitea_default_private = gitea["default_private"]
+        gitea_auto_create = gitea["auto_create"]
+
     # 保存配置
     _save_config(
         config_path,
@@ -563,6 +691,10 @@ def setup(config_path: Path | None = None) -> dict | None:
         fast_model=fast_model,
         smart_model=smart_model,
         reasoning_model=reasoning_model,
+        gitea_base_url=gitea_base_url,
+        gitea_access_token=gitea_access_token,
+        gitea_default_private=gitea_default_private,
+        gitea_auto_create=gitea_auto_create,
     )
 
     print("\n  设置完成！")

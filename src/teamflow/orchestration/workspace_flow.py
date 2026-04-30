@@ -390,7 +390,7 @@ class WorkspaceInitFlow:
             context={
                 "project_name": project.name,
                 "admin_open_id": project.admin_open_id,
-                "git_repo_path": project.git_repo_path,
+                "git_repo_path": project.git_repo_path or "仓库待关联",
             },
             skill_name="workspace_init",
             complexity="smart",

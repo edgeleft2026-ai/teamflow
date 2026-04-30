@@ -175,7 +175,7 @@ def welcome_card() -> dict:
     }
 
 
-def project_created_card(project_id: str, name: str, repo: str) -> dict:
+def project_created_card(project_id: str, name: str, repo: str | None) -> dict:
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -218,7 +218,7 @@ def project_created_card(project_id: str, name: str, repo: str) -> dict:
             {"tag": "hr"},
             {
                 "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**仓库**: {repo}"},
+                "text": {"tag": "lark_md", "content": f"**仓库**: {repo}" if repo else "**仓库**: 自动创建中"},
             },
             {"tag": "hr"},
             {
@@ -277,11 +277,11 @@ def project_create_form_card(request_id: str | None = None) -> dict:
                             "name": "git_repo_path",
                             "placeholder": {
                                 "tag": "plain_text",
-                                "content": "例如：https://github.com/org/repo.git",
+                                "content": "留空则自动在 Gitea 创建仓库",
                             },
                             "label": {
                                 "tag": "plain_text",
-                                "content": "仓库地址 *",
+                                "content": "仓库地址（可选）",
                             },
                         },
                         {
@@ -348,7 +348,7 @@ def project_create_status_card(
     *,
     status: str,
     project_name: str,
-    git_repo_path: str,
+    git_repo_path: str | None,
     steps: list[dict],
     current_step: str,
     project_id: str | None = None,
@@ -497,7 +497,7 @@ def project_create_status_card(
             "tag": "div",
             "text": {
                 "tag": "lark_md",
-                "content": f"**仓库地址**\n{git_repo_path}",
+                "content": f"**仓库地址**\n{git_repo_path}" if git_repo_path else "**仓库地址**\n将自动在 Gitea 创建",
             },
         },
         {"tag": "hr"},

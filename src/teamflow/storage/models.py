@@ -19,13 +19,15 @@ def _new_id() -> str:
 class Project(SQLModel, table=True):
     id: str = Field(default_factory=_new_id, primary_key=True)
     name: str
-    git_repo_path: str
+    git_repo_path: str | None = Field(default=None)
     admin_open_id: str
     status: str = Field(default=ProjectStatus.creating)
     workspace_status: str = Field(default=WorkspaceStatus.pending)
     feishu_group_id: str | None = Field(default=None)
     feishu_group_link: str | None = Field(default=None)
     feishu_doc_url: str | None = Field(default=None)
+    git_repo_platform: str | None = Field(default=None)
+    git_repo_auto_created: bool = Field(default=False)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -49,7 +51,7 @@ class ProjectFormSubmission(SQLModel, table=True):
     chat_id: str
     open_message_id: str = Field(index=True)
     project_name: str
-    git_repo_path: str
+    git_repo_path: str | None = Field(default=None)
     status: str = Field(default="pending", index=True)
     current_step: str = Field(default="表单已提交")
     steps_payload: str = Field(default="[]")

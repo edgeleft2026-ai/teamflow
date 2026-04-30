@@ -6,9 +6,9 @@ r"""端到端业务流程测试。
 覆盖范围:
   1. 发送创建项目表单卡片到飞书
   2. 自动模拟一次真实表单提交
-  3. 触发项目创建 + 工作空间初始化 + 欢迎消息发送
+  3. 触发项目创建 + Gitea 自动创建仓库 + 工作空间初始化 + 欢迎消息发送
   4. 等待同一张进度卡走到最终状态
-  5. 输出结果并自动清理本次创建的飞书资源与数据库记录
+  5. 输出结果并自动清理本次创建的飞书资源、Gitea 仓库与数据库记录
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ MAX_WAIT_SECONDS = 240
 class RunContext:
     request_id: str
     project_name: str
-    git_repo_path: str
+    git_repo_path: str | None
     user_id: str
     chat_id: str = ""
     form_message_id: str = ""
@@ -41,6 +41,9 @@ class RunContext:
     summary_message_id: str = ""
     final_submission_status: str = ""
     final_current_step: str = ""
+    gitea_repo_url: str = ""
+    gitea_repo_full_name: str = ""
+    gitea_auto_created: bool = False
     cleanup_errors: list[str] | None = None
 
 
@@ -62,13 +65,17 @@ def info(text: str):
     print(f"  [..] {text}")
 
 
-def _new_run_context(user_id: str) -> RunContext:
-    """生成一组随机 mock 数据，避免污染真实项目。"""
+def _new_run_context(user_id: str, *, skip_repo: bool = False) -> RunContext:
+    """生成一组随机 mock 数据，避免污染真实项目。
+
+    Args:
+        skip_repo: 为 True 时不填仓库地址，触发 Gitea 自动创建。
+    """
     suffix = uuid.uuid4().hex[:8]
     return RunContext(
         request_id=f"e2e-{uuid.uuid4()}",
         project_name=f"TeamFlow-E2E-{suffix}",
-        git_repo_path=f"https://github.com/mock-org/teamflow-e2e-{suffix}.git",
+        git_repo_path=None if skip_repo else f"https://github.com/mock-org/teamflow-e2e-{suffix}.git",
         user_id=user_id,
         cleanup_errors=[],
     )
@@ -282,9 +289,30 @@ def _cleanup_database(get_session, request_id: str, project_id: str) -> None:
         session.commit()
 
 
-async def _cleanup_run(feishu, get_session, ctx: RunContext) -> None:
-    """按最佳努力顺序回收飞书资源和数据库记录。"""
+async def _delete_gitea_repo(gitea_config, repo_full_name: str) -> None:
+    """删除 Gitea 上本次 E2E 自动创建的仓库。"""
+    if not repo_full_name or not gitea_config.base_url or not gitea_config.access_token:
+        return
+
+    from teamflow.config.settings import GiteaConfig
+    from teamflow.git.gitea_service import GiteaService
+
+    svc = GiteaService(gitea_config)
+    await svc.delete_repo(repo_full_name)
+    await svc.close()
+
+
+async def _cleanup_run(feishu, get_session, ctx: RunContext, gitea_config=None) -> None:
+    """按最佳努力顺序回收飞书资源、Gitea 仓库和数据库记录。"""
     errors = ctx.cleanup_errors if ctx.cleanup_errors is not None else []
+
+    if ctx.gitea_auto_created and gitea_config:
+        try:
+            await _delete_gitea_repo(gitea_config, ctx.gitea_repo_full_name)
+            ok("已删除 Gitea 测试仓库")
+        except Exception as exc:
+            errors.append(f"删除 Gitea 仓库失败: {exc}")
+            fail(errors[-1])
 
     try:
         await _delete_message(feishu, ctx.form_message_id)
@@ -360,6 +388,9 @@ async def _wait_for_completion(get_session, ctx: RunContext) -> None:
                 if project:
                     ctx.workspace_chat_id = project.feishu_group_id or ctx.workspace_chat_id
                     ctx.workspace_doc_url = project.feishu_doc_url or ctx.workspace_doc_url
+                    if project.git_repo_path and project.git_repo_auto_created:
+                        ctx.gitea_repo_url = project.git_repo_path
+                        ctx.gitea_auto_created = True
 
             if submission and submission.status in ("succeeded", "partial_failed", "failed"):
                 info(
@@ -401,13 +432,16 @@ def _print_run_snapshot(feishu, get_session, ctx: RunContext) -> None:
             except Exception:
                 pass
             print(f"  项目: {project.name}")
-            print(f"    id:        {project.id}")
-            print(f"    status:    {project.status}")
-            print(f"    workspace: {project.workspace_status}")
-            print(f"    group_id:  {project.feishu_group_id or '—'}")
-            print(f"    doc_url:   {project.feishu_doc_url or '—'}")
-            print(f"    doc_owner: {ctx.workspace_doc_owner_id or '—'}")
-            print(f"    link:      {project.feishu_group_link or '—'}")
+            print(f"    id:               {project.id}")
+            print(f"    status:           {project.status}")
+            print(f"    workspace:        {project.workspace_status}")
+            print(f"    group_id:         {project.feishu_group_id or '—'}")
+            print(f"    doc_url:          {project.feishu_doc_url or '—'}")
+            print(f"    doc_owner:        {ctx.workspace_doc_owner_id or '—'}")
+            print(f"    link:             {project.feishu_group_link or '—'}")
+            print(f"    git_repo_path:    {project.git_repo_path or '—'}")
+            print(f"    git_repo_platform:{project.git_repo_platform or '—'}")
+            print(f"    git_auto_created: {project.git_repo_auto_created}")
             print()
         else:
             fail("数据库中未找到本次项目记录")
@@ -465,10 +499,18 @@ async def main():
         return
 
     user_id = feishu.admin_open_id
-    ctx = _new_run_context(user_id)
+
+    gitea_config = config.gitea
+    gitea_available = bool(gitea_config.base_url and gitea_config.access_token)
+    if gitea_available:
+        info(f"gitea: {gitea_config.base_url} (auto_create={gitea_config.auto_create})")
+    else:
+        info("gitea: 未配置，跳过自动创建仓库测试")
+
+    ctx = _new_run_context(user_id, skip_repo=gitea_available)
     ok("配置加载成功")
     info(f"mock 项目名: {ctx.project_name}")
-    info(f"mock 仓库: {ctx.git_repo_path}")
+    info(f"mock 仓库: {ctx.git_repo_path or '(留空，触发 Gitea 自动创建)'}")
 
     # ====================================================================
     # Step 2: 初始化
@@ -558,7 +600,12 @@ async def main():
 
         with get_session() as session:
             event_bus = EventBus(session)
-            flow = ProjectCreateFlow(feishu, session, event_bus)
+            flow = ProjectCreateFlow(feishu, session, event_bus, gitea_config)
+            form_values = {
+                "project_name": ctx.project_name,
+            }
+            if ctx.git_repo_path:
+                form_values["git_repo_path"] = ctx.git_repo_path
             card_data = CardActionData(
                 open_id=user_id,
                 chat_id=ctx.chat_id,
@@ -568,10 +615,7 @@ async def main():
                     "teamflow_action": "submit_project_form",
                     "request_id": ctx.request_id,
                 },
-                form_values={
-                    "project_name": ctx.project_name,
-                    "git_repo_path": ctx.git_repo_path,
-                },
+                form_values=form_values,
                 token=f"e2e-token-{ctx.request_id}",
             )
             submit_result = flow.submit_form(card_data)
@@ -591,23 +635,69 @@ async def main():
         banner("Step 6: 输出结果")
         _print_run_snapshot(feishu, get_session, ctx)
 
+        # 从 Gitea repo URL 提取 full_name 用于清理
+        if ctx.gitea_auto_created and ctx.gitea_repo_url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(ctx.gitea_repo_url)
+            path = parsed.path.strip("/")
+            if path.endswith(".git"):
+                path = path[:-4]
+            ctx.gitea_repo_full_name = path
+            info(f"Gitea 仓库 full_name: {ctx.gitea_repo_full_name}")
+
     finally:
         # ====================================================================
         # Step 7: 清理资源
         # ====================================================================
         banner("Step 7: 清理资源")
-        await _cleanup_run(feishu, get_session, ctx)
+        await _cleanup_run(feishu, get_session, ctx, gitea_config)
 
     print(f"\n{'=' * 60}")
-    print("  E2E 流程执行完成")
-    print(f"  request_id: {ctx.request_id}")
-    print(f"  最终状态: {ctx.final_submission_status or 'unknown'}")
-    if ctx.cleanup_errors:
-        print("  清理结果: 部分失败")
-        for item in ctx.cleanup_errors:
-            print(f"    - {item}")
+    print("  E2E 测试总结")
+    print(f"{'=' * 60}")
+    print()
+
+    checks: list[tuple[str, bool, str]] = []
+
+    checks.append(("配置加载", bool(feishu.app_id and feishu.app_secret), "飞书 app_id/app_secret 已配置"))
+    checks.append(("数据库初始化", True, "SQLite 初始化成功"))
+
+    project_ok = ctx.final_submission_status in ("succeeded", "partial_failed")
+    checks.append(("项目创建", project_ok, f"最终状态: {ctx.final_submission_status or 'unknown'}"))
+
+    checks.append(("工作空间初始化", bool(ctx.workspace_chat_id), f"群: {ctx.workspace_chat_id or '—'}"))
+    checks.append(("项目文档创建", bool(ctx.workspace_doc_url), f"文档: {ctx.workspace_doc_url or '—'}"))
+
+    if gitea_available:
+        checks.append(("Gitea 自动创建仓库", ctx.gitea_auto_created, f"仓库: {ctx.gitea_repo_url or '—'}"))
     else:
-        print("  清理结果: 全部完成")
+        checks.append(("Gitea 自动创建仓库", True, "未配置，已跳过"))
+
+    cleanup_ok = not ctx.cleanup_errors
+    checks.append(("资源清理", cleanup_ok, "全部完成" if cleanup_ok else f"{len(ctx.cleanup_errors)} 项失败"))
+
+    pass_count = sum(1 for _, ok_flag, _ in checks if ok_flag)
+    fail_count = len(checks) - pass_count
+
+    for name, ok_flag, detail in checks:
+        mark = "✓" if ok_flag else "✗"
+        print(f"  [{mark}] {name}: {detail}")
+    print()
+
+    if fail_count == 0:
+        print(f"  全部通过 ({pass_count}/{len(checks)})")
+    else:
+        print(f"  {fail_count} 项失败，{pass_count} 项通过 ({pass_count}/{len(checks)})")
+        if ctx.cleanup_errors:
+            print()
+            print("  清理失败详情:")
+            for item in ctx.cleanup_errors:
+                print(f"    - {item}")
+
+    print()
+    print(f"  request_id: {ctx.request_id}")
+    print(f"  project_id: {ctx.project_id or '—'}")
     print(f"{'=' * 60}")
 
 

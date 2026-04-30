@@ -27,9 +27,19 @@ class AgentConfig(BaseModel):
     reasoning_model: str = "openai/gpt-4o"
 
 
+class GiteaConfig(BaseModel):
+    """Gitea (self-hosted Git service) configuration."""
+
+    base_url: str = ""
+    access_token: str = ""
+    default_private: bool = True
+    auto_create: bool = True
+
+
 class TeamFlowConfig(BaseModel):
     feishu: FeishuConfig
     agent: AgentConfig = AgentConfig()
+    gitea: GiteaConfig = GiteaConfig()
 
 
 def load_config(path: Path | str | None = None) -> TeamFlowConfig:

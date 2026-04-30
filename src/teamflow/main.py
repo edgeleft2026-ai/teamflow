@@ -154,7 +154,7 @@ async def main() -> None:
     logger.info("Database initialized")
 
     # Create command router
-    router = CommandRouter(feishu)
+    router = CommandRouter(feishu, gitea_config=config.gitea)
 
     # Startup self-test: send notification to admin if configured
     if feishu.admin_open_id:
