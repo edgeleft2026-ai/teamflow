@@ -149,7 +149,7 @@ def project_created_card(project_id: str, name: str, repo: str) -> dict:
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "飞书协作空间初始化功能即将上线，届时将自动创建项目群和文档。",
+                    "content": "工作空间初始化中，将自动创建项目群和文档，完成后通知您。",
                 },
             },
         ],
@@ -160,11 +160,13 @@ def project_create_form_card() -> dict:
     """Interactive card with a form for project creation (JSON 2.0)."""
     return {
         "schema": "2.0",
+        "config": {"update_multi": True},
         "header": {
             "title": {"tag": "plain_text", "content": "创建新项目"},
             "template": "blue",
         },
         "body": {
+            "direction": "vertical",
             "elements": [
                 {
                     "tag": "form",
@@ -290,6 +292,87 @@ def project_failed_card(step: str, reason: str) -> dict:
                 "text": {
                     "tag": "lark_md",
                     "content": "请重新发送 **\"开始创建项目\"** 重试。",
+                },
+            },
+        ],
+    }
+
+
+def workspace_init_result_card(project_name: str, steps: list[dict]) -> dict:
+    """Build a card showing workspace initialization step results.
+
+    steps: list of {"name": str, "status": "success"|"failure"|"skipped", "detail": str}
+    """
+    elements: list[dict] = []
+    for step in steps:
+        status = step.get("status", "unknown")
+        detail = step.get("detail", "")
+        if status == "success":
+            icon = "✅"
+        elif status == "failure":
+            icon = "❌"
+        elif status == "skipped":
+            icon = "⏭️"
+        else:
+            icon = "❓"
+
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"{icon} **{step['name']}**\n{detail}",
+                },
+            }
+        )
+        elements.append({"tag": "hr"})
+
+    # Remove trailing hr
+    if elements and elements[-1]["tag"] == "hr":
+        elements.pop()
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": f"工作空间初始化结果 | {project_name}"},
+            "template": "blue",
+        },
+        "elements": elements,
+    }
+
+
+def workspace_welcome_card(project_name: str, doc_url: str | None = None) -> dict:
+    """Welcome card sent to the newly created project group."""
+    doc_line = f"\n📄 [项目文档]({doc_url})" if doc_url else ""
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": f"欢迎来到 {project_name}"},
+            "template": "blue",
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"🚀 这是 **{project_name}** 的 AI 协作空间。\n"
+                        "我可以帮你跟踪任务、提醒风险和生成报告。"
+                        f"{doc_line}"
+                    ),
+                },
+            },
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        "**可用指令**\n"
+                        "• /help — 查看帮助\n"
+                        "• /status — 项目状态（开发中）\n"
+                        "• /tasks — 任务列表（开发中）"
+                    ),
                 },
             },
         ],

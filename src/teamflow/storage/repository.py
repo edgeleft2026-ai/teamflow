@@ -40,6 +40,33 @@ class ProjectRepo:
             self.session.flush()
         return project
 
+    def update_workspace(
+        self,
+        project_id: str,
+        *,
+        feishu_group_id: str | None = None,
+        feishu_group_link: str | None = None,
+        feishu_doc_url: str | None = None,
+        workspace_status: str | None = None,
+        status: str | None = None,
+    ) -> Project | None:
+        project = self.get_by_id(project_id)
+        if project:
+            if feishu_group_id is not None:
+                project.feishu_group_id = feishu_group_id
+            if feishu_group_link is not None:
+                project.feishu_group_link = feishu_group_link
+            if feishu_doc_url is not None:
+                project.feishu_doc_url = feishu_doc_url
+            if workspace_status is not None:
+                project.workspace_status = workspace_status
+            if status is not None:
+                project.status = status
+            project.updated_at = datetime.now(UTC)
+            self.session.add(project)
+            self.session.flush()
+        return project
+
 
 class ConversationStateRepo:
     def __init__(self, session: Session) -> None:

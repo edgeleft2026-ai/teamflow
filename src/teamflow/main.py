@@ -5,19 +5,23 @@ import logging
 import os
 import signal
 import subprocess
+import warnings
 from pathlib import Path
 
 from teamflow.access import EventDispatcher, EventFileWatcher, FeishuEvent, is_bot_message
-from teamflow.access.callback import start_callback_thread
 from teamflow.access.parser import (
+    extract_card_action_data,
     extract_chat_id,
     extract_message_text,
     extract_open_id,
 )
+from teamflow.ai.agent import AgentExecutor
 from teamflow.config import load_config
 from teamflow.execution.cli import find_cli_binary
 from teamflow.orchestration.command_router import CommandRouter
-from teamflow.storage.database import init_db
+from teamflow.orchestration.event_bus import EventBus
+from teamflow.orchestration.workspace_flow import WorkspaceInitFlow
+from teamflow.storage.database import get_session, init_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,8 +30,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("teamflow")
 
+# 抑制第三方库的无害警告（非错误，不影响功能）
+warnings.filterwarnings("ignore", message=".*urllib3.*")
+warnings.filterwarnings("ignore", message=".*chardet.*")
+
 DEFAULT_EVENT_TYPES = ",".join([
     "im.message.receive_v1",
+    "card.action.trigger",
 ])
 
 DEFAULT_OUTPUT_DIR = "tmp/teamflow/events"
@@ -90,6 +99,23 @@ def handle_message_event(event: FeishuEvent, router: CommandRouter, bot_app_id: 
 
     logger.info("Message received: chat=%s user=%s text=%s", chat_id, open_id, text[:100])
     router.handle(text=text, open_id=open_id, chat_id=chat_id)
+
+
+def handle_card_action_event(event: FeishuEvent, router: CommandRouter) -> None:
+    """Handle card.action.trigger events: parse and route to CommandRouter."""
+    card_data = extract_card_action_data(event)
+    if card_data is None:
+        logger.warning("Incomplete card action data, skipping")
+        return
+
+    logger.info(
+        "Card action: chat=%s user=%s tag=%s",
+        card_data.chat_id, card_data.open_id, card_data.action_tag,
+    )
+    try:
+        router.handle_card_action(card_data)
+    except Exception:
+        logger.exception("Card action handler error")
 
 
 async def _start_health_server(host: str = "127.0.0.1", port: int = 8080):
@@ -179,6 +205,7 @@ async def main() -> None:
 
     # Initialize Agent tool provider with Feishu API client
     tool_provider = None
+    agent_executor = None
     try:
         from teamflow.ai import tool_provider as tp
         from teamflow.ai.tools.feishu import init_feishu_client
@@ -189,6 +216,22 @@ async def main() -> None:
             brand=feishu.brand,
         )
         tool_provider = tp
+        agent_executor = AgentExecutor(
+            tool_provider,
+            model_overrides={
+                "fast": config.agent.fast_model,
+                "smart": config.agent.smart_model,
+                "reasoning": config.agent.reasoning_model,
+            },
+            provider=config.agent.provider,
+            timeout_seconds=config.agent.timeout_seconds,
+        )
+        # Validate configured model supports tool calling
+        if not agent_executor.validate_model("smart"):
+            logger.warning(
+                "Smart model may not support tool calling. "
+                "Check agent.fast_model/smart_model/reasoning_model in config.yaml."
+            )
         logger.info(
             "Agent smart channel ready (%d tools registered)",
             len(tool_provider.tools),
@@ -196,17 +239,25 @@ async def main() -> None:
     except Exception:
         logger.exception("Agent tool provider init failed, smart channel disabled")
 
-    # Start card callback WebSocket client (handles card.action.trigger)
-    start_callback_thread(
-        app_id=feishu.app_id,
-        app_secret=feishu.app_secret,
-        brand=feishu.brand,
-        router=router,
-    )
+    # Register workspace init event handler
+    if agent_executor:
+        workspace_flow = WorkspaceInitFlow(
+            feishu=feishu,
+            agent_executor=agent_executor,
+            session_factory=get_session,
+            max_iterations=config.agent.max_iterations,
+        )
+        EventBus.subscribe_global(
+            "project.created", workspace_flow.on_project_created
+        )
+        logger.info("Workspace init handler registered")
+    else:
+        logger.warning("Agent executor not available, workspace init disabled")
 
-    # Set up event dispatcher
+    # Set up event dispatcher — all events come through lark-cli's single WebSocket
     dispatcher = EventDispatcher()
     dispatcher.on("im.message.receive_v1", lambda e: handle_message_event(e, router, feishu.app_id))
+    dispatcher.on("card.action.trigger", lambda e: handle_card_action_event(e, router))
 
     # Log all events
     def log_event(event: FeishuEvent) -> None:

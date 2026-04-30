@@ -9,6 +9,8 @@ feishu:
 
 # Agent / AI configuration (M2+)
 agent:
+  provider: ""  # provider ID (e.g. openai, deepseek, anthropic, qwen)
+  api_mode: ""  # leave empty for auto-detection
   mcp_tools: "im.v1.*,docx.v1.*"  # MCP tools to enable (comma-separated)
   max_iterations: 10               # Max tool-use loop iterations
   timeout_seconds: 120             # Agent task timeout

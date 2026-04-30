@@ -1,4 +1,12 @@
-"""Agent Executor: LiteLLM tool-use loop for multi-step orchestration."""
+"""Agent Executor: tool-use loop with provider-aware transport layer.
+
+Integrates:
+- Transport layer for response normalization and provider detection
+- model_registry for capability validation at initialization
+- ToolProvider for tool execution
+"""
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -7,8 +15,14 @@ import os
 
 import litellm
 
+from teamflow.ai.model_registry import (
+    detect_api_mode,
+    get_model_capabilities,
+    supports_reasoning,
+)
 from teamflow.ai.models import MODEL_ROUTING, AgentResult, AgentTask
 from teamflow.ai.skills import registry
+from teamflow.ai.transports import get_transport
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +62,64 @@ def _resolve_model(complexity: str, config_override: dict | None = None) -> str:
     return MODEL_ROUTING.get(complexity, MODEL_ROUTING["smart"])
 
 
-class AgentExecutor:
-    """Executes AgentTasks using a LiteLLM tool-use loop with MCP tools."""
+def _parse_provider_n_model(model_str: str) -> tuple[str, str]:
+    """Parse 'provider/model' or 'model' into (provider, model_name)."""
+    if "/" in model_str:
+        parts = model_str.split("/", 1)
+        return parts[0], parts[1]
+    return "", model_str
 
-    def __init__(self, mcp_client, model_overrides: dict | None = None) -> None:
+
+class AgentExecutor:
+    """Executes AgentTasks using a LiteLLM tool-use loop with transport normalization.
+
+    Uses the transport layer for response normalization while keeping LiteLLM
+    as the underlying API caller (handles provider routing automatically).
+    """
+
+    def __init__(
+        self,
+        mcp_client,
+        model_overrides: dict | None = None,
+        provider: str = "",
+        timeout_seconds: int = 120,
+    ) -> None:
         """Args:
-        mcp_client: MCPClient instance (must be connected).
+        mcp_client: ToolProvider instance (supports .tools and .call_tool()).
         model_overrides: Optional dict mapping complexity tier → model name.
+        provider: Default provider ID (e.g. "openai", "deepseek"). Auto-detected if empty.
+        timeout_seconds: LittellM completion timeout.
         """
         self._mcp = mcp_client
         self._model_overrides = model_overrides or {}
+        self._provider = provider
+        self._timeout = timeout_seconds
+
+    def validate_model(self, complexity: str = "smart") -> bool:
+        """Check that the configured model supports tool calling.
+
+        Returns True if the model is known and supports tools, or if unknown
+        (we assume it works). Returns False only if the model is known to
+        lack tool-calling support.
+        """
+        model = _resolve_model(complexity, self._model_overrides)
+        provider_name, model_name = _parse_provider_n_model(model)
+        if not provider_name and self._provider:
+            provider_name = self._provider
+
+        if not provider_name:
+            return True  # can't validate without provider info
+
+        caps = get_model_capabilities(provider_name, model_name)
+        if not caps.get("supports_tools", True):
+            logger.error(
+                "Model %s/%s does not support tool calling. "
+                "Agent execution will likely fail.",
+                provider_name,
+                model_name,
+            )
+            return False
+        return True
 
     async def execute(self, task: AgentTask) -> AgentResult:
         """Run the agent tool-use loop for the given task.
@@ -73,6 +135,14 @@ class AgentExecutor:
             tools = [t for t in tools if t["function"]["name"] in task.allowed_tools]
 
         model = _resolve_model(task.complexity, self._model_overrides)
+        provider_name, model_name = _parse_provider_n_model(model)
+        if not provider_name and self._provider:
+            provider_name = self._provider
+
+        api_mode = detect_api_mode(provider_name, model_name)
+        transport = get_transport(api_mode)
+        model_supports_reasoning = supports_reasoning(provider_name, model_name)
+
         system_prompt = _build_system_prompt(task)
 
         messages: list[dict] = [
@@ -82,10 +152,13 @@ class AgentExecutor:
 
         actions: list[dict] = []
         iteration = 0
+        reasoning_log: list[str] = []
 
         logger.info(
-            "Agent start: model=%s max_iterations=%d tools=%d",
+            "Agent start: model=%s api_mode=%s provider=%s max_iterations=%d tools=%d",
             model,
+            api_mode,
+            provider_name,
             task.max_iterations,
             len(tools),
         )
@@ -95,40 +168,50 @@ class AgentExecutor:
                 iteration += 1
                 logger.info("Agent iteration %d/%d", iteration, task.max_iterations)
 
+                # Build LiteLLM kwargs
+                litellm_kwargs: dict = {
+                    "model": model,
+                    "messages": messages,
+                }
+                if tools:
+                    litellm_kwargs["tools"] = tools
+
+                # Override api_base for providers with non-default endpoints
+                from teamflow.ai.model_registry import get_litellm_base_url_override
+                base_url_override = get_litellm_base_url_override(provider_name)
+                if base_url_override:
+                    litellm_kwargs["api_base"] = base_url_override
+
+                # Add reasoning config for models that support it
+                if model_supports_reasoning:
+                    litellm_kwargs["extra_body"] = {
+                        "reasoning": {"enabled": True, "effort": "medium"}
+                    }
+
                 response = await asyncio.wait_for(
-                    litellm.acompletion(
-                        model=model,
-                        messages=messages,
-                        tools=tools if tools else None,
-                    ),
-                    timeout=120,
+                    litellm.acompletion(**litellm_kwargs),
+                    timeout=self._timeout,
                 )
 
-                choice = response.choices[0]
-                message = choice.message
+                # Normalize response through transport layer
+                normalized = transport.normalize_response(response)
 
-                if message.tool_calls:
-                    # Step A: collect tool-call info & execute MCP calls
+                # Collect reasoning content
+                if normalized.reasoning_content:
+                    reasoning_log.append(normalized.reasoning_content)
+                if normalized.reasoning:
+                    reasoning_log.append(normalized.reasoning)
+
+                if normalized.tool_calls:
+                    # Execute tool calls
                     tool_results: list[dict] = []
                     tc_list: list[dict] = []
-                    for tool_call in message.tool_calls:
-                        tc_id = tool_call.id
-                        if hasattr(tool_call.function, "name"):
-                            tc_name = tool_call.function.name
-                        else:
-                            tc_name = tool_call.function.get("name", "")
-                        tc_args_raw = (
-                            tool_call.function.arguments
-                            if hasattr(tool_call.function, "arguments")
-                            else tool_call.function.get("arguments", "{}")
-                        )
-                        if isinstance(tc_args_raw, str):
-                            try:
-                                parsed_args = json.loads(tc_args_raw)
-                            except json.JSONDecodeError:
-                                parsed_args = {"raw": tc_args_raw}
-                        else:
-                            parsed_args = tc_args_raw
+                    for tc in normalized.tool_calls:
+                        tc_id = tc.id
+                        tc_name = tc.name
+                        tc_args = tc.arguments
+
+                        parsed_args = _safe_parse_json(tc_args)
 
                         tc_list.append(
                             {
@@ -136,41 +219,47 @@ class AgentExecutor:
                                 "type": "function",
                                 "function": {
                                     "name": tc_name,
-                                    "arguments": tc_args_raw if isinstance(tc_args_raw, str)
-                                    else json.dumps(tc_args_raw),
+                                    "arguments": tc_args,
                                 },
                             }
                         )
 
-                        logger.info(
-                            "Agent tool_call: %s args=%s", tc_name, parsed_args
-                        )
-                        mcp_result = await self._mcp.call_tool(tc_name, parsed_args)
+                        logger.info("Agent tool_call: %s args=%s", tc_name, parsed_args)
+                        tool_result = await self._mcp.call_tool(tc_name, parsed_args)
                         actions.append(
-                            {"tool": tc_name, "args": parsed_args, "result": mcp_result}
+                            {
+                                "tool": tc_name,
+                                "args": parsed_args,
+                                "result": tool_result,
+                            }
                         )
                         tool_results.append(
                             {
                                 "role": "tool",
                                 "tool_call_id": tc_id,
-                                "content": json.dumps(mcp_result, ensure_ascii=False),
+                                "content": json.dumps(tool_result, ensure_ascii=False),
                             }
                         )
 
-                    # Step B: append assistant message BEFORE tool results (API requirement)
-                    assistant_msg: dict = {"role": "assistant", "content": message.content or ""}
+                    # Append assistant message before tool results (API requirement)
+                    assistant_msg: dict = {"role": "assistant", "content": normalized.content or ""}
                     assistant_msg["tool_calls"] = tc_list
                     messages.append(assistant_msg)
-
-                    # Step C: append tool-result messages
                     messages.extend(tool_results)
                 else:
-                    content = message.content or ""
+                    content = normalized.content or ""
                     logger.info("Agent finished after %d iterations", iteration)
+
+                    # Include reasoning log in the result data
+                    result_data: dict = {}
+                    if reasoning_log:
+                        result_data["reasoning"] = reasoning_log
+
                     return AgentResult(
                         success=True,
                         summary=content,
                         actions=actions,
+                        data=result_data or None,
                     )
 
             # Max iterations reached
@@ -200,6 +289,14 @@ class AgentExecutor:
             )
 
 
+def _safe_parse_json(raw: str) -> dict:
+    """Safely parse a JSON string, returning a fallback dict on failure."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {"raw": raw}
+
+
 def _build_system_prompt(task: AgentTask) -> str:
     """Build the system prompt, using a matched skill when available.
 
@@ -221,7 +318,7 @@ def _build_system_prompt(task: AgentTask) -> str:
         except KeyError as e:
             logger.warning(
                 "Skill %s: missing context var %s, using raw prompt",
-                skill.name, e
+                skill.name, e,
             )
             skill_prompt = skill.system_prompt
         return skill_prompt

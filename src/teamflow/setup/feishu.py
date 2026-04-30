@@ -57,14 +57,158 @@ def _init_registration(domain: str) -> None:
         raise RuntimeError(msg)
 
 
+# TeamFlow 需要的全部飞书权限，从 lark-cli 源码 shortcuts/ 提取的全部 bot scopes。
+_TEAMFLOW_SCOPES = [
+    # IM — 消息与群聊
+    "im:message",
+    "im:message:send_as_bot",
+    "im:message:read",
+    "im:message:readonly",
+    "im:message.group_msg",
+    "im:message.p2p_msg:readonly",
+    "im:chat:create",
+    "im:chat:read",
+    "im:chat:update",
+    "im:resource",
+    # 通讯录
+    "contact:user.base:readonly",
+    "contact:user.basic_profile:readonly",
+    "contact:contact.base:readonly",
+    "contact:contact:read",
+    "contact:user:search",
+    # 云文档
+    "docx:document:create",
+    "docx:document:readonly",
+    "docx:document:write_only",
+    "docs:document.content:read",
+    "docs:document.media:download",
+    "docs:document.media:upload",
+    "docs:document.comment:create",
+    "docs:document.comment:write_only",
+    "docs:document:export",
+    "docs:document:import",
+    "docs:permission.member:create",
+    "docs:permission.member:apply",
+    # 云空间
+    "drive:drive:read",
+    "drive:drive.metadata:readonly",
+    "drive:file:upload",
+    "drive:file:download",
+    "space:folder:create",
+    "space:document:move",
+    "space:document:shortcut",
+    "space:document:delete",
+    # 日历
+    "calendar:calendar:read",
+    "calendar:calendar.event:create",
+    "calendar:calendar.event:read",
+    "calendar:calendar.event:update",
+    "calendar:calendar.event:reply",
+    "calendar:calendar.free_busy:read",
+    # 任务
+    "task:task:read",
+    "task:task:write",
+    "task:tasklist:read",
+    "task:tasklist:write",
+    "task:comment:write",
+    # 多维表格
+    "base:app:create",
+    "base:app:read",
+    "base:app:update",
+    "base:app:copy",
+    "base:table:create",
+    "base:table:read",
+    "base:table:update",
+    "base:table:delete",
+    "base:field:create",
+    "base:field:read",
+    "base:field:update",
+    "base:field:delete",
+    "base:record:create",
+    "base:record:read",
+    "base:record:update",
+    "base:record:delete",
+    "base:view:read",
+    "base:view:write_only",
+    "base:dashboard:create",
+    "base:dashboard:read",
+    "base:dashboard:update",
+    "base:dashboard:delete",
+    "base:form:create",
+    "base:form:read",
+    "base:form:update",
+    "base:form:delete",
+    "base:role:create",
+    "base:role:read",
+    "base:role:update",
+    "base:role:delete",
+    "base:history:read",
+    "base:workflow:create",
+    "base:workflow:read",
+    "base:workflow:update",
+    # 电子表格
+    "sheets:spreadsheet:create",
+    "sheets:spreadsheet:read",
+    "sheets:spreadsheet:write_only",
+    # 幻灯片
+    "slides:presentation:create",
+    "slides:presentation:update",
+    "slides:presentation:write_only",
+    # 画板
+    "board:whiteboard:node:create",
+    "board:whiteboard:node:read",
+    # 知识库
+    "wiki:space:read",
+    "wiki:space:write_only",
+    "wiki:node:create",
+    "wiki:node:read",
+    "wiki:node:move",
+    # 视频会议
+    "vc:meeting.meetingevent:read",
+    "vc:meeting.search:read",
+    "vc:note:read",
+    "vc:record:readonly",
+    # 妙记
+    "minutes:minutes:readonly",
+    "minutes:minutes.search:read",
+    "minutes:minutes.artifacts:read",
+    "minutes:minutes.media:export",
+    "minutes:minutes.transcript:export",
+    # OKR
+    "okr:okr.content:readonly",
+    "okr:okr.period:readonly",
+    # 邮箱
+    "mail:user_mailbox:readonly",
+    "mail:user_mailbox.message:readonly",
+    "mail:user_mailbox.message:send",
+    "mail:user_mailbox.message:modify",
+    "mail:user_mailbox.message.body:read",
+    "mail:user_mailbox.message.subject:read",
+    "mail:user_mailbox.message.address:read",
+    "mail:user_mailbox.folder:read",
+    "mail:user_mailbox.event.mail_address:read",
+    "mail:event",
+    # 搜索
+    "search:docs:read",
+    "search:message",
+]
+
+_TEAMFLOW_SCOPE_STRING = " ".join(_TEAMFLOW_SCOPES)
+
+
 def _begin_registration(domain: str) -> dict:
-    """Start the device-code flow. Returns device_code, qr_url, etc."""
+    """Start the device-code flow. Returns device_code, qr_url, etc.
+
+    Note: 飞书的 scope 参数对新注册的应用部分权限（如 im:chat）需要
+    人工审核，不会在扫码时直接弹出。注册完成后通过 get_permission_url()
+    生成的链接可一键跳转到后台开通。
+    """
     base_url = _ACCOUNTS_URLS.get(domain, _ACCOUNTS_URLS["feishu"])
     res = _post_registration(base_url, {
         "action": "begin",
         "archetype": "PersonalAgent",
         "auth_method": "client_secret",
-        "request_user_info": "open_id",
+        "request_user_info": "open_id tenant_brand",
     })
     device_code = res.get("device_code")
     if not device_code:
@@ -81,6 +225,39 @@ def _begin_registration(domain: str) -> dict:
         "interval": res.get("interval") or 5,
         "expire_in": res.get("expire_in") or 600,
     }
+
+
+def get_permission_url(app_id: str, brand: str = "feishu") -> str:
+    """生成飞书应用权限配置页面的直达链接。
+
+    链接只包含最核心的权限（URL 长度限制），完整列表在终端输出。
+    """
+    open_url = _OPEN_URLS.get(brand, _OPEN_URLS["feishu"])
+    # 只放核心权限到 URL，避免参数过长
+    core = [
+        "im:message", "im:message:send_as_bot", "im:chat:create",
+        "im:message.group_msg", "im:resource",
+        "contact:user.base:readonly", "contact:user:search",
+        "docx:document:create", "docx:document:readonly",
+        "drive:drive:read", "drive:file:upload",
+        "calendar:calendar:read", "calendar:calendar.event:create",
+        "task:task:read", "task:task:write",
+        "base:app:create", "base:table:read", "base:record:create",
+        "wiki:space:read", "wiki:node:create",
+        "vc:meeting.meetingevent:read",
+        "minutes:minutes:readonly",
+        "mail:user_mailbox:readonly",
+    ]
+    scope_param = ",".join(core)
+    return (
+        f"{open_url}/app/{app_id}/auth"
+        f"?q={scope_param}&op_from=openapi&token_type=tenant"
+    )
+
+
+def get_all_scopes() -> list[str]:
+    """返回完整的权限列表（终端输出用）。"""
+    return list(_TEAMFLOW_SCOPES)
 
 
 def _poll_registration(

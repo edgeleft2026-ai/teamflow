@@ -88,7 +88,7 @@ def start_callback_client(
         app_secret,
         event_handler=event_handler,
         domain=domain,
-        log_level=lark.LogLevel.INFO,
+        log_level=lark.LogLevel.WARNING,
     )
 
     return client

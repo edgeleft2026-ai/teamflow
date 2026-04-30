@@ -29,7 +29,7 @@ def init_feishu_client(app_id: str, app_secret: str, brand: str = "feishu") -> N
     feishu_client = lark.Client.builder() \
         .app_id(app_id) \
         .app_secret(app_secret) \
-        .open_api_base_url(base_url) \
+        .domain(base_url) \
         .log_level(lark.LogLevel.INFO) \
         .build()
     logger.info("Feishu client initialized (brand=%s)", brand)
@@ -66,12 +66,7 @@ async def _add_members_to_chat(chat_id: str, open_ids: list[str]) -> dict:
     """Add members to a Feishu group chat."""
     import lark_oapi as lark
 
-    builder = lark.im.v1.ChatMember.builder()
-    members = [
-        builder.member_id_type("open_id").member_id(oid).build()
-        for oid in open_ids
-    ]
-    body = lark.im.v1.CreateChatMembersRequestBody.builder().members(members).build()
+    body = lark.im.v1.CreateChatMembersRequestBody.builder().id_list(open_ids).build()
     req = (
         lark.im.v1.CreateChatMembersRequest.builder()
         .chat_id(chat_id)
@@ -87,12 +82,13 @@ async def _add_members_to_chat(chat_id: str, open_ids: list[str]) -> dict:
 
 async def _get_chat(chat_id: str) -> dict:
     """Get Feishu group chat info."""
-    req = feishu_client.im.v1.GetChatRequest.builder().chat_id(chat_id).build()
+    import lark_oapi as lark
+    req = lark.im.v1.GetChatRequest.builder().chat_id(chat_id).build()
     resp = feishu_client.im.v1.chat.get(req)
     if not resp.success():
         raise RuntimeError(f"Get chat failed: {resp.msg} ({resp.code})")
     d = resp.data
-    return {"chat_id": d.chat_id, "name": d.name, "description": d.description}
+    return {"chat_id": chat_id, "name": d.name, "description": d.description}
 
 
 async def _get_chat_link(chat_id: str) -> dict:
@@ -146,7 +142,11 @@ async def _send_message(
 
 
 async def _create_document(title: str, content: str = "") -> dict:
-    """Create a Feishu Docx document."""
+    """Create a Feishu Docx document.
+
+    Note: the SDK's CreateDocumentRequestBody only supports title and folder_token.
+    Content must be written separately via the document block API after creation.
+    """
     import lark_oapi as lark
 
     body = lark.docx.v1.CreateDocumentRequestBody.builder() \
@@ -159,19 +159,103 @@ async def _create_document(title: str, content: str = "") -> dict:
     if not resp.success():
         raise RuntimeError(f"Create document failed: {resp.msg} ({resp.code})")
     d = resp.data
-    return {"document_id": d.document.document_id, "title": d.document.title, "url": d.document.url}
+    doc_url = f"https://{_open_domain()}/docx/{d.document.document_id}"
+    return {"document_id": d.document.document_id, "title": d.document.title, "url": doc_url}
+
+
+async def _add_document_collaborator(document_id: str, open_id: str) -> dict:
+    """Add a collaborator (full access) to a document, so the admin can manage it.
+
+    Feishu documents created by the bot are owned by the bot
+    unless we explicitly share them with the admin.
+    """
+    import json
+    from urllib.request import Request, urlopen
+
+    token_req = Request(
+        f"{feishu_client._config.domain}/open-apis/auth/v3/tenant_access_token/internal",
+        data=json.dumps({
+            "app_id": feishu_client._config.app_id,
+            "app_secret": feishu_client._config.app_secret,
+        }).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urlopen(token_req, timeout=10) as resp:
+        token_data = json.loads(resp.read().decode("utf-8"))
+    access_token = token_data.get("tenant_access_token")
+    if not access_token:
+        raise RuntimeError("Failed to get tenant access token")
+
+    body = json.dumps({
+        "member_type": "openid",
+        "member_id": open_id,
+        "perm": "full_access",
+    }).encode("utf-8")
+    url = (
+        f"{feishu_client._config.domain}/open-apis/drive/v1/permissions/"
+        f"{document_id}/members?type=docx"
+    )
+    req = Request(url, data=body, headers={
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    })
+    with urlopen(req, timeout=10) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+
+    if result.get("code") != 0:
+        raise RuntimeError(f"Add collaborator failed: {result.get('msg', 'unknown')}")
+    return {"document_id": document_id, "collaborator": open_id}
+
+
+def _open_domain() -> str:
+    """Return the Feishu/Lark user-facing domain.
+
+    open.feishu.cn is the API domain, not the document viewing domain.
+    feishu.cn auto-redirects to the correct tenant subdomain.
+    """
+    domain = feishu_client._config.domain
+    if "larksuite" in domain:
+        return "larksuite.com"
+    return "feishu.cn"
 
 
 # ── Bot info tool (for testing) ───────────────────────────────────────────
 
 
 async def _get_bot_info() -> dict:
-    """Get bot information."""
-    resp = feishu_client.im.v1.bot.info()
-    if not resp.success():
-        raise RuntimeError(f"Get bot info failed: {resp.msg} ({resp.code})")
-    d = resp.data
-    return {"bot_name": d.name, "app_id": d.app_id, "activate_status": d.activate_status}
+    """Get bot information via direct HTTP (not wrapped in lark-oapi SDK client)."""
+    import json
+    from urllib.request import Request, urlopen
+
+    token_req = Request(
+        f"{feishu_client._config.domain}/open-apis/auth/v3/tenant_access_token/internal",
+        data=json.dumps({
+            "app_id": feishu_client._config.app_id,
+            "app_secret": feishu_client._config.app_secret,
+        }).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urlopen(token_req, timeout=10) as resp:
+        token_data = json.loads(resp.read().decode("utf-8"))
+    access_token = token_data.get("tenant_access_token")
+    if not access_token:
+        raise RuntimeError("Failed to get tenant access token for bot info")
+
+    bot_req = Request(
+        f"{feishu_client._config.domain}/open-apis/bot/v3/info",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urlopen(bot_req, timeout=10) as resp:
+        bot_data = json.loads(resp.read().decode("utf-8"))
+    bot = bot_data.get("bot", {})
+    return {
+        "bot_name": bot.get("app_name", ""),
+        "app_id": bot.get("app_id", ""),
+        "activate_status": bot.get("activate_status", 0),
+    }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -290,7 +374,56 @@ DOCX_TOOLS = [
         },
         "handler": _create_document,
     },
+    {
+        "name": "drive.v1.permission.add_collaborator",
+        "description": (
+            "Add a collaborator to a Feishu document with full access permission. "
+            "Use this after creating a document to share it with the project admin "
+            "so they can manage it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Document ID to share"},
+                "open_id": {"type": "string", "description": "User open_id to add as collaborator"},
+            },
+            "required": ["document_id", "open_id"],
+        },
+        "handler": _add_document_collaborator,
+    },
 ]
+
+async def _run_lark_cli(command: str, args: list[str]) -> dict:
+    """Execute a lark-cli command via subprocess (in thread to avoid blocking).
+
+    Uses the same feishu credentials as the SDK client.
+
+    Args:
+        command: lark-cli command. One of: im, contact, calendar, drive, task,
+                 docs, sheets, base, approval, wiki, minutes, vc, mail, okr.
+        args: CLI arguments, e.g. ["+search-user", "--query", "John"].
+    """
+    import asyncio
+
+    from teamflow.config import FeishuConfig
+    from teamflow.execution.cli import find_cli_binary
+    from teamflow.execution.cli import run_cli as _run_cli_core
+
+    fconfig = feishu_client._config
+    feishu_cfg = FeishuConfig(
+        app_id=fconfig.app_id,
+        app_secret=fconfig.app_secret,
+        brand="feishu" if "feishu" in str(fconfig.domain) else "lark",
+    )
+    binary = find_cli_binary("lark-cli")
+    cli_args = [command] + args
+    result = await asyncio.to_thread(
+        _run_cli_core, cli_args, feishu=feishu_cfg, cli_binary=binary, timeout=30,
+    )
+    if not result.success:
+        return {"success": False, "error": result.error or "CLI command failed"}
+    return {"success": True, "output": result.output or {}, "stderr": result.stderr_log}
+
 
 BOT_TOOLS = [
     {
@@ -301,4 +434,44 @@ BOT_TOOLS = [
     },
 ]
 
-ALL_TOOLS = CHAT_TOOLS + MESSAGE_TOOLS + DOCX_TOOLS + BOT_TOOLS
+CLI_TOOLS = [
+    {
+        "name": "lark_cli.run",
+        "description": (
+            "Execute a lark-cli command via subprocess. "
+            "Use this for Feishu operations that don't have a dedicated SDK tool. "
+            "Available commands: im, contact, calendar, drive, task, docs, sheets, base, "
+            "approval, wiki, minutes, vc, mail, okr. "
+            "Each command has subcommands (prefixed with +) and API operations. "
+            "Example: command='contact', args=['+search-user', '--query', 'John']. "
+            "IMPORTANT: Never use destructive operations (delete, remove members) without "
+            "explicit user confirmation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "lark-cli top-level command. One of: im, contact, calendar, drive, "
+                        "task, docs, sheets, base, approval, wiki, minutes, vc, mail, okr"
+                    ),
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "CLI arguments for the command. E.g. for 'im': ['+messages-send', "
+                        "'--chat-id', 'oc_xxx', '--text', 'hello']. "
+                        "For 'contact': ['+search-user', '--query', 'name']. "
+                        "Use '--help' to discover available subcommands."
+                    ),
+                },
+            },
+            "required": ["command", "args"],
+        },
+        "handler": _run_lark_cli,
+    },
+]
+
+ALL_TOOLS = CHAT_TOOLS + MESSAGE_TOOLS + DOCX_TOOLS + BOT_TOOLS + CLI_TOOLS

@@ -1,19 +1,35 @@
-"""Agent skill system: register, match, and enrich AgentTasks with skill configuration.
+"""Agent skill system — file-driven, SKILL.md auto-discovery.
 
-A Skill bundles a system prompt, tool whitelist, and model routing together
-under a name and trigger set. The SkillRegistry matches incoming tasks to skills
-and injects the skill's configuration into the AgentTask.
+Drop a ``SKILL.md`` into ``skills/<name>/`` and it's automatically picked up.
+Users can also add skills under ``~/.teamflow/skills/<name>/SKILL.md``.
 
-Skills are registered at import time — import the registry and call
-``registry.register(skill)`` during module initialization.
+Frontmatter format (YAML)::
+
+    ---
+    name: my-skill
+    description: "What this skill does"
+    triggers:
+      - "keyword"
+      - "/regex pattern/"
+    allowed_tools:
+      - "im.v1.chat.create"
+    complexity: smart
+    max_iterations: 10
+    ---
+    # Prompt content (Markdown)
+    You are a ...
+
+Each SKILL.md becomes a ``Skill`` registered in the global ``registry``.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from teamflow.ai.models import AgentTask
 
@@ -26,12 +42,10 @@ class Skill:
 
     Args:
         name: Unique identifier, e.g. "workspace_init".
-        description: Human-readable description shown in skill listings.
-        triggers: List of keywords or regex patterns. When the task description
-                  matches any trigger, this skill is activated.
-        system_prompt: The system prompt template. May contain Python
-                       ``{placeholder}`` variables filled from task.context.
-        allowed_tools: Optional whitelist of MCP tool names. None means all.
+        description: Human-readable description.
+        triggers: List of keywords or regex patterns.
+        system_prompt: The system prompt (may contain ``{placeholder}`` vars).
+        allowed_tools: Optional whitelist of tool names. None means all.
         complexity: Override for the AgentTask complexity tier.
         max_iterations: Override for max tool-use loop iterations.
     """
@@ -69,9 +83,7 @@ class Skill:
     def apply(self, task: AgentTask) -> AgentTask:
         """Return a new AgentTask enriched with this skill's configuration.
 
-        Skill values take precedence over the original task fields. The
-        skill's system_prompt is NOT formatted here — that happens at execution
-        time when the full task.context is available.
+        Skill values take precedence over the original task fields.
         """
         return AgentTask(
             description=task.description,
@@ -90,8 +102,7 @@ class Skill:
 class SkillRegistry:
     """Thread-safe registry of all available Agent skills.
 
-    Skills are registered at import time (by loading skill modules) and
-    matched against task descriptions at runtime.
+    Skills are auto-discovered from SKILL.md files at startup.
     """
 
     def __init__(self) -> None:
@@ -102,9 +113,7 @@ class SkillRegistry:
         if skill.name in self._skills:
             logger.warning("Skill %s is being replaced", skill.name)
         self._skills[skill.name] = skill
-        logger.info(
-            "Registered skill: %s (triggers=%s)", skill.name, skill.triggers
-        )
+        logger.info("Registered skill: %s", skill.name)
 
     def get(self, name: str) -> Skill | None:
         """Look up a skill by name."""
@@ -133,20 +142,10 @@ class SkillRegistry:
         skill_name: str | None = None,
         **kwargs,
     ) -> AgentTask:
-        """Convenience: build an AgentTask, optionally matching a skill.
+        """Build an AgentTask, optionally matching a skill.
 
         If ``skill_name`` is given, look it up directly. Otherwise attempt to
-        match the description against registered skills. When a skill is found
-        its configuration is merged into the resulting AgentTask.
-
-        Args:
-            description: Natural language task description.
-            context: Structured context dict.
-            skill_name: Optional explicit skill name (bypasses trigger matching).
-            **kwargs: Additional AgentTask fields (complexity, etc.).
-
-        Returns:
-            An AgentTask enriched with skill configuration if a skill matched.
+        match the description against registered skills.
         """
         task = AgentTask(description=description, context=context or {}, **kwargs)
         skill = None
@@ -158,12 +157,169 @@ class SkillRegistry:
             task = skill.apply(task)
         return task
 
+    # ── Auto-discovery of SKILL.md files ────────────────────────────────
 
-# Global skill registry singleton.
+    def discover_from_dir(self, skills_dir: str | Path) -> int:
+        """Scan a directory for ``<skill>/SKILL.md`` files and register them.
+
+        Returns the number of skills registered.
+        """
+        skills_dir = Path(skills_dir)
+        if not skills_dir.is_dir():
+            return 0
+
+        count = 0
+        for skill_dir in sorted(skills_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+
+            try:
+                skill = self._load_skill_from_md(skill_md)
+                if skill:
+                    self.register(skill)
+                    count += 1
+            except Exception:
+                logger.exception("Failed to load skill from %s", skill_md)
+
+        return count
+
+    def _load_skill_from_md(self, path: Path) -> Skill | None:
+        """Parse a SKILL.md file into a Skill object."""
+        text = path.read_text(encoding="utf-8")
+
+        # Split frontmatter from body
+        meta, body = _parse_frontmatter(text)
+        if not meta.get("name"):
+            logger.warning("SKILL.md at %s has no 'name' in frontmatter, skipping", path)
+            return None
+
+        # Parse triggers — support both YAML list and inline names
+        triggers: list[str] = []
+        raw_triggers = meta.get("triggers", [])
+        if isinstance(raw_triggers, list):
+            triggers = [str(t) for t in raw_triggers]
+        elif isinstance(raw_triggers, str):
+            triggers = [raw_triggers]
+
+        # Auto-derive triggers from description if none specified
+        if not triggers:
+            desc = meta.get("description", "")
+            triggers = _extract_triggers_from_text(meta["name"], desc)
+
+        # Add the skill name itself as a trigger
+        name = meta["name"]
+        if name not in triggers:
+            triggers.insert(0, name)
+
+        # Parse allowed_tools
+        allowed_tools: list[str] | None = None
+        raw_tools = meta.get("allowed_tools")
+        if isinstance(raw_tools, list):
+            allowed_tools = [str(t) for t in raw_tools]
+        elif isinstance(raw_tools, str):
+            allowed_tools = [raw_tools]
+
+        return Skill(
+            name=name,
+            description=str(meta.get("description", "")),
+            triggers=triggers,
+            system_prompt=body,
+            allowed_tools=allowed_tools,
+            complexity=meta.get("complexity"),
+            max_iterations=_parse_optional_int(meta.get("max_iterations")),
+        )
+
+
+# ── Frontmatter parser ──────────────────────────────────────────────────
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse YAML frontmatter from a SKILL.md file.
+
+    Returns (metadata_dict, body_text).
+    If no valid frontmatter is found, returns ({}, text).
+    """
+    text = text.strip()
+    if not text.startswith("---"):
+        return {}, text
+
+    idx = text.find("---", 3)
+    if idx == -1:
+        return {}, text
+
+    fm_text = text[3:idx].strip()
+    body = text[idx + 3:].strip()
+
+    meta: dict = {}
+    current_key: str | None = None
+    current_list: list = []
+
+    for raw_line in fm_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        # Check for list item: "  - value"
+        list_match = re.match(r"^\s*-\s+(.+)$", line)
+        if list_match and current_key:
+            current_list.append(list_match.group(1).strip().strip('"'))
+            continue
+
+        # Key: value or key:
+        kv_match = re.match(r'^(\w[\w_-]*)\s*:\s*(.*)$', line)
+        if kv_match:
+            # Flush previous list
+            if current_key and current_list:
+                meta[current_key] = current_list
+                current_list = []
+                current_key = None
+
+            key = kv_match.group(1)
+            val = kv_match.group(2).strip().strip('"')
+            if val:
+                meta[key] = val
+                current_key = None
+            else:
+                current_key = key
+                current_list = []
+
+    # Flush final list
+    if current_key and current_list:
+        meta[current_key] = current_list
+
+    return meta, body
+
+
+def _extract_triggers_from_text(name: str, text: str) -> list[str]:
+    """Extract short trigger keywords from text."""
+    triggers: list[str] = []
+    # Extract Chinese words (2-6 chars)
+    cn_words = re.findall(r"[一-鿿]{2,6}", text)
+    triggers.extend(cn_words[:5])
+    # Extract English words (3+ chars)
+    en_words = re.findall(r"\b[a-zA-Z]{3,12}\b", text)
+    _stop_words = {"the", "and", "for", "use", "with", "that", "this", "from"}
+    triggers.extend(w for w in en_words[:3] if w.lower() not in _stop_words)
+    return triggers
+
+
+def _parse_optional_int(val: object) -> int | None:
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+# ── Global singleton ────────────────────────────────────────────────────
+
 registry = SkillRegistry()
 
 
-# Convenience decorator for registering skills.
+# Convenience decorator for programmatic registration (backward compat).
 def register_skill(
     name: str,
     description: str,
@@ -173,20 +329,7 @@ def register_skill(
     complexity: str | None = None,
     max_iterations: int | None = None,
 ) -> Callable:
-    """Decorator that builds and registers a Skill from a function that returns
-    its system prompt (or None).
-
-    Usage::
-
-        @register_skill(
-            name="my_skill",
-            description="Does something useful",
-            triggers=["do something"],
-            allowed_tools=["tool.a", "tool.b"],
-        )
-        def my_skill_prompt() -> str:
-            return "You are a helpful assistant..."
-    """
+    """Decorator that builds and registers a Skill from a function."""
 
     def decorator(fn: Callable) -> Callable:
         prompt = fn() if callable(fn) else ""
@@ -205,7 +348,23 @@ def register_skill(
     return decorator
 
 
-# Load built-in skill modules.
-from teamflow.ai.skills.workspace_init import register_workspace_skill  # noqa: E402
+# ── Built-in skill directories to scan ──────────────────────────────────
 
-register_workspace_skill()
+_BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent
+_USER_SKILLS_DIR = Path(os.path.expanduser("~/.teamflow/skills"))
+
+
+def _discover_all_skills() -> None:
+    """Scan all skill directories and register discovered skills."""
+    # Built-in skills (project)
+    builtin_count = registry.discover_from_dir(_BUILTIN_SKILLS_DIR)
+    logger.info("Discovered %d built-in skills from %s", builtin_count, _BUILTIN_SKILLS_DIR)
+
+    # User skills (~/.teamflow/skills/)
+    if _USER_SKILLS_DIR.is_dir():
+        user_count = registry.discover_from_dir(_USER_SKILLS_DIR)
+        logger.info("Discovered %d user skills from %s", user_count, _USER_SKILLS_DIR)
+
+
+# Run discovery at import time.
+_discover_all_skills()

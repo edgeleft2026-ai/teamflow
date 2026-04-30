@@ -17,6 +17,8 @@ class FeishuConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Agent configuration for the AI/smart channel."""
 
+    provider: str = ""  # provider ID (openai, deepseek, anthropic, ...)
+    api_mode: str = ""  # chat_completions | anthropic_messages
     mcp_tools: str = "im.v1.*,docx.v1.*"
     max_iterations: int = 10
     timeout_seconds: int = 120

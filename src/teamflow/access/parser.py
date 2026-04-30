@@ -85,8 +85,8 @@ def is_bot_message(event: FeishuEvent, bot_app_id: str) -> bool:
     sender = event.body.get("sender", {})
     sender_id = sender.get("sender_id", {})
     sender_type = sender.get("sender_type", "")
-    # Bot messages have sender_type "app" or the sender_id.app_id matches.
-    if sender_type == "app":
+    # Bot messages have sender_type "app", "bot", or the sender_id.app_id matches.
+    if sender_type in ("app", "bot"):
         return True
     if sender_id.get("app_id") == bot_app_id:
         return True
@@ -129,26 +129,42 @@ def extract_message_text(event: FeishuEvent) -> str | None:
 
 
 def extract_card_action_data(event: FeishuEvent) -> CardActionData | None:
-    """Extract all relevant data from a card.action.trigger event."""
+    """Extract all relevant data from a card.action.trigger event.
+
+    Handles both the standard nested SDK format (event.*) and
+    lark-cli --compact flat format.
+    """
     body = event.body
-    ev = body.get("event", {})
+
+    # Try nested SDK format first: body.event.context / body.event.operator
+    ev = body.get("event") if isinstance(body.get("event"), dict) else body
     if not isinstance(ev, dict):
         return None
 
-    context = ev.get("context", {})
-    chat_id = context.get("open_chat_id") if isinstance(context, dict) else None
+    # lark-cli compact format: body.context / body.operator / body.action
+    #   context can be at top level or under "event"
+    context = ev.get("context", {}) or body.get("context", {})
+    if not isinstance(context, dict):
+        context = {}
+    chat_id = context.get("open_chat_id")
 
-    operator = ev.get("operator", {})
-    open_id = operator.get("open_id") if isinstance(operator, dict) else None
+    operator = ev.get("operator", {}) or body.get("operator", {})
+    if not isinstance(operator, dict):
+        operator = {}
+    open_id = operator.get("open_id")
 
     if not chat_id or not open_id:
         return None
 
-    action = ev.get("action", {})
-    action_tag = action.get("tag", "") if isinstance(action, dict) else ""
-    action_value = action.get("value", {}) if isinstance(action, dict) else {}
-    form_values = ev.get("form_value", {}) or {}
-    token = ev.get("token", "") or ""
+    # lark-cli compact format: body.action.tag / body.action.value / body.action.form_value
+    action = ev.get("action", {}) or body.get("action", {})
+    if not isinstance(action, dict):
+        action = {}
+    action_tag = action.get("tag", "")
+    action_value = action.get("value", {})
+    form_values = action.get("form_value", {}) or ev.get("form_value", {}) or {}
+
+    token = body.get("token", "") or ev.get("token", "") or ""
 
     return CardActionData(
         open_id=open_id,

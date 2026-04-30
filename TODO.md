@@ -140,30 +140,30 @@
 
 ### 编排层改造
 
-- [ ] 监听 `project.created` 事件
-- [ ] 校验 `project.created` 幂等键
-- [ ] 读取项目基础信息
-- [ ] 构建 Agent 任务描述：项目名、管理员 open_id、初始化清单
+- [x] 监听 `project.created` 事件
+- [x] 校验 `project.created` 幂等键
+- [x] 读取项目基础信息
+- [x] 构建 Agent 任务描述：项目名、管理员 open_id、初始化清单
 
 ### Agent 执行：工作空间初始化
 
-- [ ] Agent 任务：创建群 + 拉人 + 创建文档 + 发欢迎语
-- [ ] Agent 上下文注入：项目信息、管理员信息
-- [ ] Agent 处理部分失败：某步失败不阻断后续，收集所有结果
-- [ ] Agent 结果解析：提取群 ID、群链接、文档 URL
+- [x] Agent 任务：创建群 + 拉人 + 创建文档 + 发欢迎语
+- [x] Agent 上下文注入：项目信息、管理员信息
+- [x] Agent 处理部分失败：某步失败不阻断后续，收集所有结果
+- [x] Agent 结果解析：提取群 ID、群链接、文档 URL
 
 ### 确定性通道：结果回写与通知
 
-- [ ] 群 ID、群链接、文档 URL、初始化状态写回项目记录
-- [ ] 向管理员发送初始化结果回执（确定性通道：send_card）
-- [ ] 发布 `project.workspace_initialized` 事件
+- [x] 群 ID、群链接、文档 URL、初始化状态写回项目记录
+- [x] 向管理员发送初始化结果回执（确定性通道：send_card）
+- [x] 发布 `project.workspace_initialized` 事件
 
 ### 异常处理
 
-- [ ] 幂等保障：同一项目不重复创建群和文档
-- [ ] 单步失败不遮蔽其他已完成结果
-- [ ] Agent 执行超时或失败 → 降级为分步确定性通道执行
-- [ ] 回执发送失败 → 记录日志，可补偿
+- [x] 幂等保障：同一项目不重复创建群和文档
+- [x] 单步失败不遮蔽其他已完成结果
+- [x] Agent 执行超时或失败 → 降级为分步确定性通道执行
+- [x] 回执发送失败 → 记录日志，可补偿
 
 验收依据：`docs/prd/modules/02-feishu-workspace.md`。
 
@@ -278,7 +278,7 @@
 
 - [x] 三层架构：接入层 -> 业务编排层 -> 执行层
 - [x] Python 执行层封装：`execution/cli.py` 封装 lark-cli subprocess 调用 + 环境变量注入
-- [ ] 双通道调度：编排层根据动作复杂度选择确定性/智能通道
+- [x] 双通道调度：编排层根据动作复杂度选择确定性/智能通道
 - [x] Agent 执行通道：`ai/agent.py` + `ai/tools/`（ToolProvider 直连 lark-oapi SDK）
 - [x] 执行结果结构化：`CLIResult` 返回 success、output、error、stderr_log
 - [x] Agent 结果结构化：`AgentResult` 返回 success、summary、actions
@@ -291,7 +291,7 @@
 - [x] ConversationState
 - [x] EventLog
 - [x] ActionLog
-- [ ] Project（status 字段扩展：workspace 初始化相关状态）
+- [x] Project（status 字段扩展：workspace 初始化相关状态）
 - [ ] Member
 - [ ] Task
 - [ ] Observation
@@ -331,8 +331,8 @@
 - [x] 飞书消息收发链路可用
 - [x] 项目创建成功后能落库
 - [x] Agent 能通过 ToolProvider 调用飞书 API（7 个工具已注册，lark-oapi SDK 直连，`verify_agent.py` 23/23 通过）
-- [ ] 重复事件不会创建重复群或重复文档（M2 编排幂等逻辑）
-- [ ] 初始化失败有用户可见反馈（M2 回执消息）
+- [x] 重复事件不会创建重复群或重复文档（M2 编排幂等逻辑）
+- [x] 初始化失败有用户可见反馈（M2 回执消息）
 - [x] Agent 工具调用链有日志和审计记录（agent.py + ToolProvider 双重日志）
 - [ ] 日志中没有密钥或访问令牌
 - [ ] 高风险动作不会绕过审批直接执行

@@ -89,6 +89,36 @@ def send_markdown(
     return send_message(feishu, chat_id=chat_id, user_id=user_id, markdown=markdown, **kwargs)
 
 
+async def send_text_async(
+    feishu: FeishuConfig,
+    text: str,
+    *,
+    chat_id: str | None = None,
+    user_id: str | None = None,
+    **kwargs,
+) -> CLIResult:
+    """Async wrapper for send_text — runs lark-cli in a thread to avoid blocking."""
+    import asyncio
+    return await asyncio.to_thread(
+        send_text, feishu, text, chat_id=chat_id, user_id=user_id, **kwargs
+    )
+
+
+async def send_card_async(
+    feishu: FeishuConfig,
+    card: dict,
+    *,
+    chat_id: str | None = None,
+    user_id: str | None = None,
+    **kwargs,
+) -> CLIResult:
+    """Async wrapper for send_card — runs lark-cli in a thread to avoid blocking."""
+    import asyncio
+    return await asyncio.to_thread(
+        send_card, feishu, card, chat_id=chat_id, user_id=user_id, **kwargs
+    )
+
+
 def create_chat(
     feishu: FeishuConfig,
     *,

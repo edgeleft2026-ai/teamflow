@@ -14,6 +14,8 @@ EventHandler = Callable[[EventLog], None]
 
 
 class EventBus:
+    _global_handlers: dict[str, list[EventHandler]] = {}
+
     def __init__(self, session: Session) -> None:
         self.session = session
         self.repo = EventLogRepo(session)
@@ -21,6 +23,10 @@ class EventBus:
 
     def subscribe(self, event_type: str, handler: EventHandler) -> None:
         self._handlers.setdefault(event_type, []).append(handler)
+
+    @classmethod
+    def subscribe_global(cls, event_type: str, handler: EventHandler) -> None:
+        cls._global_handlers.setdefault(event_type, []).append(handler)
 
     def publish(
         self,
@@ -44,7 +50,10 @@ class EventBus:
         )
         logger.info("Event published: %s (id=%s)", event_type, event.id[:8])
 
-        for handler in self._handlers.get(event_type, []):
+        handlers = self._handlers.get(event_type, []) + self._global_handlers.get(
+            event_type, []
+        )
+        for handler in handlers:
             try:
                 handler(event)
             except Exception:
