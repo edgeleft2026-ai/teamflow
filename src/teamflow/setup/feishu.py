@@ -88,6 +88,7 @@ _TEAMFLOW_SCOPES = [
     "docs:document:export",
     "docs:document:import",
     "docs:permission.member:create",
+    "docs:permission.member:transfer",
     "docs:permission.member:apply",
     # 云空间
     "drive:drive:read",

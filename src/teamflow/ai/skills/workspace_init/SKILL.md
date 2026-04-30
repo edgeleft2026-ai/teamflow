@@ -1,6 +1,6 @@
 ---
 name: workspace_init
-description: "Initialize a Feishu workspace: create group, add admin, create doc, send welcome"
+description: "Initialize a Feishu workspace: create group, add admin, create doc"
 triggers:
   - "初始化工作空间"
   - "/初始化.*工作空间/"
@@ -14,7 +14,6 @@ allowed_tools:
   - "im.v1.chat.members.create"
   - "im.v1.chat.get"
   - "im.v1.chat.link"
-  - "im.v1.message.create"
   - "im.v1.message.get"
   - "docx.v1.document.create"
   - "docx.v1.document.get"
@@ -45,12 +44,6 @@ Execute the following steps in order. After each step, check the result before p
    - Content should include: project name, admin, git repo ({git_repo_path}), and creation date.
    - After creation, use `drive.v1.permission.add_collaborator` to share the document
      with the admin ({admin_open_id}) so they can manage it.
-
-5. **Send a welcome message to the group** using `im.v1.message.create`.
-   - Greet the team and explain the purpose of this group.
-   - Mention the project name "{project_name}".
-   - Include available commands: /help, /status, /tasks
-   - Link to the project document if created.
 
 ## Rules
 

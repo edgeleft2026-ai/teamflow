@@ -7,6 +7,7 @@ import threading
 
 import lark_oapi as lark
 from lark_oapi.event.callback.model.p2_card_action_trigger import (
+    CallBackCard,
     CallBackToast,
     P2CardActionTrigger,
     P2CardActionTriggerResponse,
@@ -36,6 +37,7 @@ def _build_card_action_data(data: P2CardActionTrigger) -> CardActionData | None:
     return CardActionData(
         open_id=open_id,
         chat_id=chat_id,
+        open_message_id=context.open_message_id if context else "",
         action_tag=action.tag or "" if action else "",
         action_value=action.value or {} if action else {},
         form_values=action.form_value or {} if action else {},
@@ -65,15 +67,20 @@ def start_callback_client(
             card_data.chat_id, card_data.open_id, card_data.action_tag,
         )
 
+        result = None
         try:
-            router.handle_card_action(card_data)
+            result = router.handle_card_action(card_data)
         except Exception:
             logger.exception("Card callback handler error")
 
         resp = P2CardActionTriggerResponse()
         resp.toast = CallBackToast()
-        resp.toast.type = "info"
-        resp.toast.content = "提交成功"
+        resp.toast.type = result.toast_type if result else "info"
+        resp.toast.content = result.toast_text if result else "处理中"
+        if result and result.card:
+            resp.card = CallBackCard()
+            resp.card.type = "raw"
+            resp.card.data = result.card
         return resp
 
     event_handler = (

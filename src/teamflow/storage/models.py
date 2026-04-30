@@ -42,6 +42,23 @@ class ConversationState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class ProjectFormSubmission(SQLModel, table=True):
+    id: str = Field(default_factory=_new_id, primary_key=True)
+    request_id: str = Field(unique=True, index=True)
+    open_id: str = Field(index=True)
+    chat_id: str
+    open_message_id: str = Field(index=True)
+    project_name: str
+    git_repo_path: str
+    status: str = Field(default="pending", index=True)
+    current_step: str = Field(default="表单已提交")
+    steps_payload: str = Field(default="[]")
+    project_id: str | None = Field(default=None, index=True)
+    error_message: str | None = Field(default=None)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
 class EventLog(SQLModel, table=True):
     id: str = Field(default_factory=_new_id, primary_key=True)
     event_type: str = Field(index=True)

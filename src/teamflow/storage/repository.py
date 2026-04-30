@@ -7,7 +7,13 @@ from datetime import UTC, datetime
 from sqlmodel import Session, select
 
 from teamflow.core.enums import ActionResult, EventStatus, ProjectStatus, WorkspaceStatus
-from teamflow.storage.models import ActionLog, ConversationState, EventLog, Project
+from teamflow.storage.models import (
+    ActionLog,
+    ConversationState,
+    EventLog,
+    Project,
+    ProjectFormSubmission,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +133,69 @@ class ConversationStateRepo:
         if existing:
             self.session.delete(existing)
             self.session.flush()
+
+
+class ProjectFormSubmissionRepo:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get_by_request_id(self, request_id: str) -> ProjectFormSubmission | None:
+        stmt = select(ProjectFormSubmission).where(ProjectFormSubmission.request_id == request_id)
+        return self.session.exec(stmt).first()
+
+    def get_by_project_id(self, project_id: str) -> ProjectFormSubmission | None:
+        stmt = select(ProjectFormSubmission).where(ProjectFormSubmission.project_id == project_id)
+        return self.session.exec(stmt).first()
+
+    def create(
+        self,
+        *,
+        request_id: str,
+        open_id: str,
+        chat_id: str,
+        open_message_id: str,
+        project_name: str,
+        git_repo_path: str,
+        status: str,
+        current_step: str,
+        steps: list[dict],
+    ) -> ProjectFormSubmission:
+        submission = ProjectFormSubmission(
+            request_id=request_id,
+            open_id=open_id,
+            chat_id=chat_id,
+            open_message_id=open_message_id,
+            project_name=project_name,
+            git_repo_path=git_repo_path,
+            status=status,
+            current_step=current_step,
+            steps_payload=json.dumps(steps, ensure_ascii=False),
+        )
+        self.session.add(submission)
+        self.session.flush()
+        return submission
+
+    def update_progress(
+        self,
+        request_id: str,
+        *,
+        status: str,
+        current_step: str,
+        steps: list[dict],
+        project_id: str | None = None,
+        error_message: str | None = None,
+    ) -> ProjectFormSubmission | None:
+        submission = self.get_by_request_id(request_id)
+        if submission:
+            submission.status = status
+            submission.current_step = current_step
+            submission.steps_payload = json.dumps(steps, ensure_ascii=False)
+            submission.project_id = project_id
+            submission.error_message = error_message
+            submission.updated_at = datetime.now(UTC)
+            self.session.add(submission)
+            self.session.flush()
+        return submission
 
 
 class EventLogRepo:

@@ -28,6 +28,7 @@ def init_db(db_path: str | None = None) -> None:
         ConversationState,
         EventLog,
         Project,
+        ProjectFormSubmission,
     )
 
     SQLModel.metadata.create_all(_engine)

@@ -6,7 +6,11 @@ from teamflow.config import FeishuConfig
 from teamflow.execution.messages import send_card
 from teamflow.orchestration.card_templates import project_create_form_card, welcome_card
 from teamflow.orchestration.event_bus import EventBus
-from teamflow.orchestration.project_flow import FLOW_NAME, ProjectCreateFlow
+from teamflow.orchestration.project_flow import (
+    FLOW_NAME,
+    CardActionHandleResult,
+    ProjectCreateFlow,
+)
 from teamflow.storage.database import get_session
 from teamflow.storage.repository import ConversationStateRepo
 
@@ -50,7 +54,7 @@ class CommandRouter:
         # 无法识别 — 发送引导
         send_card(self.feishu, welcome_card(), chat_id=chat_id)
 
-    def handle_card_action(self, card_data) -> None:
+    def handle_card_action(self, card_data) -> CardActionHandleResult | None:
         """Route a card action event to the appropriate handler."""
         action_value = card_data.action_value
         teamflow_action = action_value.get("teamflow_action", "")
@@ -60,11 +64,10 @@ class CommandRouter:
             flow = ProjectCreateFlow(self.feishu, session, event_bus)
 
             if teamflow_action == "submit_project_form":
-                flow.create_from_form(
-                    open_id=card_data.open_id,
-                    chat_id=card_data.chat_id,
-                    form_values=card_data.form_values,
-                )
-                return
+                return flow.submit_form(card_data)
 
         logger.warning("Unknown card action: %s", teamflow_action)
+        return CardActionHandleResult(
+            toast_type="error",
+            toast_text="未识别的卡片操作",
+        )

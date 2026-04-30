@@ -207,6 +207,28 @@ async def _add_document_collaborator(document_id: str, open_id: str) -> dict:
     return {"document_id": document_id, "collaborator": open_id}
 
 
+async def _transfer_document_owner(document_id: str, open_id: str) -> dict:
+    """Transfer document ownership to the specified admin user."""
+    import lark_oapi as lark
+
+    owner = lark.drive.v1.Owner.builder() \
+        .member_type("openid") \
+        .member_id(open_id) \
+        .build()
+    req = lark.drive.v1.TransferOwnerPermissionMemberRequest.builder() \
+        .token(document_id) \
+        .type("docx") \
+        .need_notification(False) \
+        .remove_old_owner(False) \
+        .old_owner_perm("full_access") \
+        .request_body(owner) \
+        .build()
+    resp = feishu_client.drive.v1.permission_member.transfer_owner(req)
+    if not resp.success():
+        raise RuntimeError(f"Transfer document owner failed: {resp.msg} ({resp.code})")
+    return {"document_id": document_id, "owner_open_id": open_id}
+
+
 def _open_domain() -> str:
     """Return the Feishu/Lark user-facing domain.
 

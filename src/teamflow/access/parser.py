@@ -24,6 +24,7 @@ class CardActionData:
 
     open_id: str
     chat_id: str
+    open_message_id: str
     action_tag: str
     action_value: dict
     form_values: dict
@@ -147,6 +148,7 @@ def extract_card_action_data(event: FeishuEvent) -> CardActionData | None:
     if not isinstance(context, dict):
         context = {}
     chat_id = context.get("open_chat_id")
+    open_message_id = context.get("open_message_id", "")
 
     operator = ev.get("operator", {}) or body.get("operator", {})
     if not isinstance(operator, dict):
@@ -169,6 +171,7 @@ def extract_card_action_data(event: FeishuEvent) -> CardActionData | None:
     return CardActionData(
         open_id=open_id,
         chat_id=chat_id,
+        open_message_id=open_message_id,
         action_tag=action_tag,
         action_value=action_value if isinstance(action_value, dict) else {},
         form_values=form_values if isinstance(form_values, dict) else {},

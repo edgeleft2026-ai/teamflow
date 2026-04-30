@@ -77,6 +77,39 @@ def send_card(
     )
 
 
+def update_card_message(
+    feishu: FeishuConfig,
+    message_id: str,
+    card: dict,
+) -> CLIResult:
+    """Update a previously sent interactive card message."""
+    import lark_oapi as lark
+
+    base_url = (
+        "https://open.feishu.cn"
+        if feishu.brand == "feishu"
+        else "https://open.larksuite.com"
+    )
+    client = lark.Client.builder() \
+        .app_id(feishu.app_id) \
+        .app_secret(feishu.app_secret) \
+        .domain(base_url) \
+        .log_level(lark.LogLevel.WARNING) \
+        .build()
+
+    body = lark.im.v1.PatchMessageRequestBody.builder() \
+        .content(json.dumps(card, ensure_ascii=False)) \
+        .build()
+    req = lark.im.v1.PatchMessageRequest.builder() \
+        .message_id(message_id) \
+        .request_body(body) \
+        .build()
+    resp = client.im.v1.message.patch(req)
+    if not resp.success():
+        return CLIResult(success=False, error=f"{resp.msg} ({resp.code})")
+    return CLIResult(success=True)
+
+
 def send_markdown(
     feishu: FeishuConfig,
     markdown: str,
@@ -117,6 +150,17 @@ async def send_card_async(
     return await asyncio.to_thread(
         send_card, feishu, card, chat_id=chat_id, user_id=user_id, **kwargs
     )
+
+
+async def update_card_message_async(
+    feishu: FeishuConfig,
+    message_id: str,
+    card: dict,
+) -> CLIResult:
+    """Async wrapper for update_card_message."""
+    import asyncio
+
+    return await asyncio.to_thread(update_card_message, feishu, message_id, card)
 
 
 def create_chat(
