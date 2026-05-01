@@ -164,6 +164,7 @@ def _save_config(
     gitea_access_token: str = "",
     gitea_default_private: bool = True,
     gitea_auto_create: bool = True,
+    gitea_org_name: str = "",
 ) -> None:
     config = {
         "feishu": {
@@ -189,6 +190,8 @@ def _save_config(
             "default_private": gitea_default_private,
             "auto_create": gitea_auto_create,
         }
+        if gitea_org_name:
+            config["gitea"]["org_name"] = gitea_org_name
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
@@ -513,7 +516,7 @@ def _gitea_setup() -> dict | None:
 
     do_configure = questionary.confirm(
         "是否配置 Gitea？（可跳过，后续手动编辑 config.yaml）",
-        default=False,
+        default=True,
         style=_CUSTOM_STYLE,
     ).ask()
     if not do_configure:
@@ -561,13 +564,18 @@ def _gitea_setup() -> dict | None:
         async def _validate():
             valid = await svc.check_token()
             username = ""
+            orgs = []
             if valid:
                 user = await svc.get_current_user()
                 username = user.username
+                try:
+                    orgs = await svc.list_orgs()
+                except Exception:
+                    orgs = []
             await svc.close()
-            return valid, username
+            return valid, username, orgs
 
-        valid, username = asyncio.run(_validate())
+        valid, username, orgs = asyncio.run(_validate())
         if valid:
             print(f"  ✓ 连接成功，用户: {username}")
         else:
@@ -591,12 +599,177 @@ def _gitea_setup() -> dict | None:
             return _gitea_setup()
         return None
 
+    # ── 组织选择 ──
+    org_name = ""
+    if orgs:
+        org_choices = [
+            questionary.Choice(
+                f"{o.full_name or o.username} ({o.username})",
+                o.username,
+            )
+            for o in orgs
+        ]
+        org_choices.append(questionary.Choice("不使用组织（仓库创建在个人空间下）", ""))
+        print("\n  检测到以下组织：")
+        selected_org = questionary.select(
+            "选择仓库默认所属组织：",
+            choices=org_choices,
+            style=_CUSTOM_STYLE,
+        ).ask()
+        if selected_org is None:
+            selected_org = ""
+        org_name = selected_org
+    else:
+        print("\n  当前用户未加入任何组织。")
+        org_url = f"{base_url}/org/create"
+        print(f"  请先在 Gitea 上创建组织: {org_url}")
+        retry_org = questionary.confirm(
+            "已创建组织？是否刷新重试？",
+            default=False,
+            style=_CUSTOM_STYLE,
+        ).ask()
+        if retry_org:
+            try:
+                cfg2 = GiteaConfig(base_url=base_url, access_token=access_token)
+                svc2 = GiteaService(cfg2)
+
+                async def _retry_orgs():
+                    o = await svc2.list_orgs()
+                    await svc2.close()
+                    return o
+
+                orgs = asyncio.run(_retry_orgs())
+                if orgs:
+                    org_choices = [
+                        questionary.Choice(
+                            f"{o.full_name or o.username} ({o.username})",
+                            o.username,
+                        )
+                        for o in orgs
+                    ]
+                    selected_org = questionary.select(
+                        "选择仓库默认所属组织：",
+                        choices=org_choices,
+                        style=_CUSTOM_STYLE,
+                    ).ask()
+                    org_name = selected_org or ""
+                else:
+                    print("  仍未检测到组织，仓库将创建在个人空间下。")
+            except Exception:
+                print("  获取组织列表失败，仓库将创建在个人空间下。")
+
     return {
         "base_url": base_url,
         "access_token": access_token,
         "default_private": default_private,
         "auto_create": auto_create,
+        "org_name": org_name,
     }
+
+
+def _batch_register_prompt(
+    *,
+    app_id: str,
+    app_secret: str,
+    brand: str,
+    gitea_base_url: str,
+    gitea_access_token: str,
+    org_name: str = "",
+) -> None:
+    """提示并执行从飞书通讯录批量注册 Gitea 账号。"""
+    print()
+    print("-" * 50)
+    print("  批量注册 Gitea 账号")
+    print("-" * 50)
+    print("  从飞书通讯录获取公司全部员工，自动在 Gitea 上创建账号。")
+    print("  规则：")
+    print("    - 用户名: 邮箱 @ 前缀")
+    print("    - 邮箱:   飞书中的邮箱地址")
+    print("    - 密码:   手机号（去掉国际区号）")
+    print("    - 已有账号自动跳过")
+    print("    - 注册后自动加入组织" + (f" ({org_name})" if org_name else ""))
+    print()
+
+    do_register = questionary.confirm(
+        "是否立即批量注册 Gitea 账号？",
+        default=True,
+        style=_CUSTOM_STYLE,
+    ).ask()
+    if not do_register:
+        print("  已跳过。可稍后运行: teamflow batch-register")
+        return
+
+    try:
+        import asyncio
+
+        from teamflow.config.settings import FeishuConfig, GiteaConfig
+        from teamflow.orchestration.batch_register import batch_register
+
+        feishu_cfg = FeishuConfig(
+            app_id=app_id, app_secret=app_secret, brand=brand
+        )
+        gitea_cfg = GiteaConfig(
+            base_url=gitea_base_url, access_token=gitea_access_token
+        )
+
+        print("\n  正在获取飞书通讯录并注册 Gitea 账号...")
+        print("  (这可能需要几分钟，取决于公司人数)\n")
+
+        results = asyncio.run(batch_register(
+            feishu_config=feishu_cfg,
+            gitea_config=gitea_cfg,
+            org_name=org_name,
+            must_change_password=False,
+            send_notification=True,
+            add_to_org=bool(org_name),
+        ))
+
+        if not results:
+            print("  未获取到任何用户，请检查飞书通讯录权限范围。")
+            return
+
+        created = sum(1 for r in results if r.status == "created")
+        notified = sum(1 for r in results if r.notified)
+        skipped = sum(1 for r in results if r.status == "skipped")
+        errors = sum(1 for r in results if r.status == "error")
+
+        print()
+        print("=" * 50)
+        print("  批量注册完成")
+        print(
+            f"  创建: {created}  已通知: {notified}"
+            f"  跳过: {skipped}  失败: {errors}"
+        )
+        print("=" * 50)
+
+        if created > 0:
+            print("\n  新创建的账号:")
+            for r in results:
+                if r.status == "created":
+                    print(f"    ✓ {r.username} ({r.name} <{r.email}>)")
+
+        if errors > 0:
+            print("\n  失败的账号:")
+            for r in results:
+                if r.status == "error":
+                    print(f"    ✗ {r.username} ({r.name}): {r.message}")
+
+        print()
+
+    except Exception as exc:
+        from teamflow.orchestration.batch_register import GiteaAdminRequiredError
+        if isinstance(exc, GiteaAdminRequiredError):
+            print(f"\n  ✗ {exc}")
+            print()
+            print("  解决方法：")
+            print(f"    1. 打开 {gitea_base_url}/user/settings/applications")
+            print("    2. 删除旧 Token，重新生成一个新 Token")
+            print("    3. 生成时务必勾选 ✅ write:admin 权限")
+            print("    4. 将新 Token 更新到 config.yaml 的 gitea.access_token")
+            print("    5. 重新运行: teamflow batch-register")
+        else:
+            print(f"\n  批量注册失败: {exc}")
+            print("  可稍后运行: teamflow batch-register")
 
 
 def setup(config_path: Path | None = None) -> dict | None:
@@ -674,11 +847,13 @@ def setup(config_path: Path | None = None) -> dict | None:
     gitea_access_token = ""
     gitea_default_private = True
     gitea_auto_create = True
+    gitea_org_name = ""
     if gitea is not None:
         gitea_base_url = gitea["base_url"]
         gitea_access_token = gitea["access_token"]
         gitea_default_private = gitea["default_private"]
         gitea_auto_create = gitea["auto_create"]
+        gitea_org_name = gitea.get("org_name", "")
 
     # 保存配置
     _save_config(
@@ -695,7 +870,19 @@ def setup(config_path: Path | None = None) -> dict | None:
         gitea_access_token=gitea_access_token,
         gitea_default_private=gitea_default_private,
         gitea_auto_create=gitea_auto_create,
+        gitea_org_name=gitea_org_name,
     )
+
+    # 批量注册 Gitea 账号
+    if gitea_base_url and gitea_access_token:
+        _batch_register_prompt(
+            app_id=result["app_id"],
+            app_secret=result["app_secret"],
+            brand=result["domain"],
+            gitea_base_url=gitea_base_url,
+            gitea_access_token=gitea_access_token,
+            org_name=gitea_org_name,
+        )
 
     print("\n  设置完成！")
     from teamflow.ai.model_registry import get_litellm_env

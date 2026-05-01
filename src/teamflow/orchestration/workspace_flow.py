@@ -315,6 +315,38 @@ class WorkspaceInitFlow:
                 },
             )
 
+            # 8.5 Ensure Gitea Team for project access control
+            if chat_id and project.git_repo_path:
+                try:
+                    from teamflow.config.settings import load_config
+                    from teamflow.orchestration.access_sync import AccessSyncFlow
+
+                    settings = load_config()
+                    gitea_cfg = settings.gitea
+                    if gitea_cfg and gitea_cfg.base_url and gitea_cfg.access_token:
+                        org_name = gitea_cfg.org_name or ""
+                        if org_name:
+                            team_id = await AccessSyncFlow.ensure_project_team(
+                                gitea_config=gitea_cfg,
+                                project_id=project.id,
+                                project_name=project.name,
+                                chat_id=chat_id,
+                                org_name=org_name,
+                                repo_full_name=project.git_repo_path,
+                            )
+                            if team_id:
+                                logger.info(
+                                    "项目 Team 已就绪: project=%s team_id=%d",
+                                    project.id[:8], team_id,
+                                )
+                            else:
+                                logger.warning(
+                                    "项目 Team 创建失败: project=%s",
+                                    project.id[:8],
+                                )
+                except Exception:
+                    logger.exception("Gitea Team 创建异常: project=%s", project.id[:8])
+
             # 9. Group welcome — send only after workspace initialization has been finalized.
             welcome_step = await self._send_group_welcome(
                 project.name,

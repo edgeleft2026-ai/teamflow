@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING, Any
 from .dispatcher import DispatchResult, EventDispatcher, EventHandler
 from .parser import (
     CardActionData,
+    ChatMemberEventData,
     FeishuEvent,
     extract_card_action_data,
     extract_chat_id,
+    extract_chat_member_data,
     extract_message_text,
     extract_open_id,
     is_bot_message,
@@ -25,9 +27,11 @@ __all__ = [
     "EventHandler",
     "EventFileWatcher",
     "CardActionData",
+    "ChatMemberEventData",
     "FeishuEvent",
     "extract_card_action_data",
     "extract_chat_id",
+    "extract_chat_member_data",
     "extract_message_text",
     "extract_open_id",
     "is_bot_message",

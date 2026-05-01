@@ -301,6 +301,7 @@ class ProjectCreateFlow:
             gitea = GiteaService(self.gitea_config)
             result = asyncio.run(gitea.create_repo(
                 project.name,
+                org=self.gitea_config.org_name,
                 description=f"Auto-created by TeamFlow for project: {project.name}",
             ))
             self.project_repo.update_workspace(

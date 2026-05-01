@@ -34,6 +34,7 @@ class GiteaConfig(BaseModel):
     access_token: str = ""
     default_private: bool = True
     auto_create: bool = True
+    org_name: str = ""
 
 
 class LoggingConfig(BaseModel):

@@ -6,13 +6,23 @@ from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
-from teamflow.core.enums import ActionResult, EventStatus, ProjectStatus, WorkspaceStatus
+from teamflow.core.enums import (
+    ActionResult,
+    BindingStatus,
+    EventStatus,
+    MemberStatus,
+    ProjectStatus,
+    WorkspaceStatus,
+)
 from teamflow.storage.models import (
     ActionLog,
     ConversationState,
     EventLog,
     Project,
+    ProjectAccessBinding,
     ProjectFormSubmission,
+    ProjectMember,
+    UserIdentityBinding,
 )
 
 logger = logging.getLogger(__name__)
@@ -276,3 +286,188 @@ class ActionLogRepo:
         self.session.add(log)
         self.session.flush()
         return log
+
+
+class UserIdentityBindingRepo:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get_by_open_id(self, open_id: str) -> UserIdentityBinding | None:
+        stmt = select(UserIdentityBinding).where(
+            UserIdentityBinding.open_id == open_id,
+            UserIdentityBinding.status == BindingStatus.active,
+        )
+        return self.session.exec(stmt).first()
+
+    def get_by_gitea_username(self, gitea_username: str) -> UserIdentityBinding | None:
+        stmt = select(UserIdentityBinding).where(
+            UserIdentityBinding.gitea_username == gitea_username,
+            UserIdentityBinding.status == BindingStatus.active,
+        )
+        return self.session.exec(stmt).first()
+
+    def upsert(
+        self,
+        open_id: str,
+        gitea_username: str,
+        *,
+        gitea_user_id: int | None = None,
+        email: str = "",
+    ) -> UserIdentityBinding:
+        existing = self.get_by_open_id(open_id)
+        if existing:
+            existing.gitea_username = gitea_username
+            if gitea_user_id is not None:
+                existing.gitea_user_id = gitea_user_id
+            if email:
+                existing.email = email
+            existing.status = BindingStatus.active
+            existing.updated_at = datetime.now(UTC)
+            self.session.add(existing)
+            self.session.flush()
+            return existing
+
+        binding = UserIdentityBinding(
+            open_id=open_id,
+            gitea_username=gitea_username,
+            gitea_user_id=gitea_user_id,
+            email=email,
+        )
+        self.session.add(binding)
+        self.session.flush()
+        logger.info(
+            "创建身份绑定: open_id=%s -> gitea=%s",
+            open_id[:8], gitea_username,
+        )
+        return binding
+
+
+class ProjectAccessBindingRepo:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get_by_project_id(self, project_id: str) -> ProjectAccessBinding | None:
+        stmt = select(ProjectAccessBinding).where(
+            ProjectAccessBinding.project_id == project_id,
+            ProjectAccessBinding.status == BindingStatus.active,
+        )
+        return self.session.exec(stmt).first()
+
+    def get_by_chat_id(self, feishu_chat_id: str) -> ProjectAccessBinding | None:
+        stmt = select(ProjectAccessBinding).where(
+            ProjectAccessBinding.feishu_chat_id == feishu_chat_id,
+            ProjectAccessBinding.status == BindingStatus.active,
+        )
+        return self.session.exec(stmt).first()
+
+    def create(
+        self,
+        project_id: str,
+        feishu_chat_id: str,
+        *,
+        gitea_org_name: str = "",
+        gitea_team_id: int | None = None,
+        gitea_team_name: str = "",
+        default_repo_permission: str = "write",
+    ) -> ProjectAccessBinding:
+        binding = ProjectAccessBinding(
+            project_id=project_id,
+            feishu_chat_id=feishu_chat_id,
+            gitea_org_name=gitea_org_name,
+            gitea_team_id=gitea_team_id,
+            gitea_team_name=gitea_team_name,
+            default_repo_permission=default_repo_permission,
+        )
+        self.session.add(binding)
+        self.session.flush()
+        logger.info(
+            "创建项目访问绑定: project=%s chat=%s team=%s",
+            project_id[:8], feishu_chat_id[:8], gitea_team_name,
+        )
+        return binding
+
+    def update_team(
+        self,
+        project_id: str,
+        *,
+        gitea_team_id: int | None = None,
+        gitea_team_name: str | None = None,
+    ) -> ProjectAccessBinding | None:
+        binding = self.get_by_project_id(project_id)
+        if binding:
+            if gitea_team_id is not None:
+                binding.gitea_team_id = gitea_team_id
+            if gitea_team_name is not None:
+                binding.gitea_team_name = gitea_team_name
+            binding.updated_at = datetime.now(UTC)
+            self.session.add(binding)
+            self.session.flush()
+        return binding
+
+
+class ProjectMemberRepo:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get_active(
+        self,
+        project_id: str,
+        open_id: str,
+    ) -> ProjectMember | None:
+        stmt = select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.open_id == open_id,
+            ProjectMember.status == MemberStatus.active,
+        )
+        return self.session.exec(stmt).first()
+
+    def list_by_project(self, project_id: str) -> list[ProjectMember]:
+        stmt = select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.status == MemberStatus.active,
+        )
+        return list(self.session.exec(stmt).all())
+
+    def add(
+        self,
+        project_id: str,
+        open_id: str,
+        *,
+        gitea_username: str = "",
+        role: str = "developer",
+        source: str = "chat_join",
+    ) -> ProjectMember:
+        existing = self.get_active(project_id, open_id)
+        if existing:
+            existing.gitea_username = gitea_username or existing.gitea_username
+            existing.role = role
+            existing.status = MemberStatus.active
+            existing.source = source
+            existing.updated_at = datetime.now(UTC)
+            self.session.add(existing)
+            self.session.flush()
+            return existing
+
+        member = ProjectMember(
+            project_id=project_id,
+            open_id=open_id,
+            gitea_username=gitea_username,
+            role=role,
+            source=source,
+        )
+        self.session.add(member)
+        self.session.flush()
+        logger.info(
+            "添加项目成员: project=%s open_id=%s gitea=%s",
+            project_id[:8], open_id[:8], gitea_username,
+        )
+        return member
+
+    def remove(self, project_id: str, open_id: str) -> ProjectMember | None:
+        member = self.get_active(project_id, open_id)
+        if member:
+            member.status = MemberStatus.removed
+            member.updated_at = datetime.now(UTC)
+            self.session.add(member)
+            self.session.flush()
+        return member

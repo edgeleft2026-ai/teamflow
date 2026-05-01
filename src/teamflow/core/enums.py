@@ -31,3 +31,19 @@ class EventStatus(StrEnum):
 class ActionResult(StrEnum):
     success = "success"
     failure = "failure"
+
+
+class MemberRole(StrEnum):
+    admin = "admin"
+    developer = "developer"
+    viewer = "viewer"
+
+
+class MemberStatus(StrEnum):
+    active = "active"
+    removed = "removed"
+
+
+class BindingStatus(StrEnum):
+    active = "active"
+    revoked = "revoked"

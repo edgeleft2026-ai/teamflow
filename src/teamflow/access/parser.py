@@ -177,3 +177,50 @@ def extract_card_action_data(event: FeishuEvent) -> CardActionData | None:
         form_values=form_values if isinstance(form_values, dict) else {},
         token=token,
     )
+
+
+@dataclass
+class ChatMemberEventData:
+    chat_id: str
+    open_ids: list[str]
+
+
+def extract_chat_member_data(event: FeishuEvent) -> ChatMemberEventData | None:
+    """Extract chat_id and user open_ids from im.chat.member.bot.* events.
+
+    Handles both im.chat.member.user.added_v1 and im.chat.member.user.deleted_v1.
+    """
+    body = event.body
+
+    ev = body.get("event") if isinstance(body.get("event"), dict) else body
+    if not isinstance(ev, dict):
+        return None
+
+    chat_id = (
+        ev.get("chat_id")
+        or ev.get("chat", {}).get("chat_id")
+        or body.get("chat_id")
+    )
+    if not chat_id:
+        return None
+
+    open_ids: list[str] = []
+
+    users = ev.get("users") or ev.get("data", {}).get("users") or []
+    if isinstance(users, list):
+        for user in users:
+            if isinstance(user, dict):
+                uid = user.get("open_id") or user.get("user_id", "")
+                if uid:
+                    open_ids.append(uid)
+            elif isinstance(user, str):
+                open_ids.append(user)
+
+    user_id = ev.get("user_id") or ev.get("open_id") or ""
+    if user_id and user_id not in open_ids:
+        open_ids.append(user_id)
+
+    if not open_ids:
+        return None
+
+    return ChatMemberEventData(chat_id=chat_id, open_ids=open_ids)

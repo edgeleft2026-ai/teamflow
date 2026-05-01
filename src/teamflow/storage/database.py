@@ -31,7 +31,10 @@ def init_db(db_path: str | None = None) -> None:
         ConversationState,
         EventLog,
         Project,
+        ProjectAccessBinding,
         ProjectFormSubmission,
+        ProjectMember,
+        UserIdentityBinding,
     )
 
     SQLModel.metadata.create_all(_engine)

@@ -32,6 +32,8 @@ warnings.filterwarnings("ignore", message=".*chardet.*")
 DEFAULT_EVENT_TYPES = ",".join([
     "im.message.receive_v1",
     "card.action.trigger",
+    "im.chat.member.user.added_v1",
+    "im.chat.member.user.deleted_v1",
 ])
 
 DEFAULT_OUTPUT_DIR = "tmp/teamflow/events"
@@ -266,6 +268,33 @@ async def main() -> None:
     dispatcher = EventDispatcher()
     dispatcher.on("im.message.receive_v1", lambda e: handle_message_event(e, router, feishu.app_id))
     dispatcher.on("card.action.trigger", lambda e: handle_card_action_event(e, router))
+
+    # Access sync: handle chat member add/remove events
+    from teamflow.access.parser import extract_chat_member_data
+    from teamflow.orchestration.access_sync import AccessSyncFlow
+
+    access_sync = AccessSyncFlow(feishu=feishu, gitea_config=config.gitea)
+
+    def handle_member_added(event: FeishuEvent) -> None:
+        member_data = extract_chat_member_data(event)
+        if not member_data:
+            return
+        for open_id in member_data.open_ids:
+            asyncio.create_task(
+                access_sync.on_member_added(member_data.chat_id, open_id)
+            )
+
+    def handle_member_removed(event: FeishuEvent) -> None:
+        member_data = extract_chat_member_data(event)
+        if not member_data:
+            return
+        for open_id in member_data.open_ids:
+            asyncio.create_task(
+                access_sync.on_member_removed(member_data.chat_id, open_id)
+            )
+
+    dispatcher.on("im.chat.member.user.added_v1", handle_member_added)
+    dispatcher.on("im.chat.member.user.deleted_v1", handle_member_removed)
 
     # Log all events
     def log_event(event: FeishuEvent) -> None:

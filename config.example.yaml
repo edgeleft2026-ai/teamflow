@@ -24,6 +24,7 @@ gitea:
   access_token: ""                        # Gitea access token (Settings > Applications > Access Tokens)
   default_private: true                   # Create private repos by default
   auto_create: true                       # Auto-create repo when git_repo_path is not provided
+  org_name: ""                            # Default organization for new repos (set during setup)
 
 # Logging configuration
 logging:
