@@ -47,15 +47,16 @@ def _build_gitea_account_card(
     password: str,
     gitea_base_url: str,
     org_name: str = "",
+    added_to_org: bool = False,
 ) -> dict:
     """构建 Gitea 账号创建通知的飞书互动卡片。"""
     login_url = f"{gitea_base_url}/user/login"
     settings_url = f"{gitea_base_url}/user/settings/account"
 
     org_section = ""
-    if org_name:
+    if added_to_org and org_name:
         org_section = (
-            f"\n**所属组织：**{org_name}"
+            f"\n- **所属组织：**{org_name}"
         )
 
     body_md = (
@@ -76,13 +77,14 @@ def _build_gitea_account_card(
         f"💡 **使用指引**\n\n"
     )
 
-    if org_name:
+    if added_to_org and org_name:
         body_md += (
             f"- 你已加入组织「{org_name}」，可查看组织下的所有仓库\n"
             f"- 如需创建新仓库，请联系管理员或在组织下新建\n"
         )
     else:
         body_md += (
+            "- 加入项目群后，你将自动获得对应仓库的访问权限\n"
             "- 如需创建新仓库，请联系管理员\n"
         )
 
@@ -121,17 +123,18 @@ async def batch_register(
     org_name: str = "",
     must_change_password: bool = False,
     send_notification: bool = True,
-    add_to_org: bool = True,
+    add_to_org: bool = False,
 ) -> list[RegistrationResult]:
     """从飞书通讯录获取所有用户，批量注册 Gitea 账号。
 
     Args:
         feishu_config: 飞书配置
         gitea_config: Gitea 配置
-        org_name: 组织名，注册后自动加入该组织
+        org_name: 组织名
         must_change_password: 是否强制首次登录修改密码
         send_notification: 是否通过飞书发送注册通知
-        add_to_org: 是否将用户加入组织
+        add_to_org: 是否将用户加入组织（默认 False，
+            用户加入项目群时会自动加入对应项目 Team）
 
     Returns:
         注册结果列表
@@ -223,9 +226,11 @@ async def batch_register(
                 )
 
                 # 加入组织
+                user_added_to_org = False
                 if add_to_org and org_name:
                     try:
                         await gitea_svc.add_org_member(org_name, username)
+                        user_added_to_org = True
                         logger.info(
                             "[%d/%d] 已将 %s 加入组织 %s",
                             i + 1, len(valid_users), username, org_name,
@@ -246,6 +251,7 @@ async def batch_register(
                             password=password,
                             gitea_base_url=gitea_config.base_url,
                             org_name=org_name,
+                            added_to_org=user_added_to_org,
                         )
                         await contact_svc.send_card_message(user.open_id, card)
                         notified = True

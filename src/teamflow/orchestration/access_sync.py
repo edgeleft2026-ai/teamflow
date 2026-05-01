@@ -43,6 +43,34 @@ def _safe_team_name(project_name: str) -> str:
     return safe[:50] or "project-team"
 
 
+def _parse_repo_ref(repo_ref: str) -> tuple[str, str] | None:
+    """从仓库引用中提取 (org, repo)。
+
+    支持格式:
+      - "Edgeleft/TeamFlow"
+      - "https://git.lighter.games/Edgeleft/TeamFlow"
+      - "https://git.lighter.games/Edgeleft/TeamFlow.git"
+    """
+    if not repo_ref:
+        return None
+    if "/" not in repo_ref:
+        return None
+    if repo_ref.startswith(("http://", "https://")):
+        path = repo_ref.split("://", 1)[1]
+        parts = path.split("/")
+        if len(parts) >= 3:
+            org = parts[-2]
+            repo = parts[-1]
+            if repo.endswith(".git"):
+                repo = repo[:-4]
+            return (org, repo)
+        return None
+    if "/" in repo_ref and not repo_ref.startswith("/"):
+        parts = repo_ref.split("/", 1)
+        return (parts[0], parts[1].removesuffix(".git"))
+    return None
+
+
 class AccessSyncFlow:
     def __init__(
         self,
@@ -299,9 +327,11 @@ class AccessSyncFlow:
                 )
                 team_id = team.id
 
-            if repo_full_name and "/" in repo_full_name:
-                org, repo = repo_full_name.split("/", 1)
-                await gitea.add_team_repo(team_id, org, repo)
+            if repo_full_name:
+                parsed = _parse_repo_ref(repo_full_name)
+                if parsed:
+                    org, repo = parsed
+                    await gitea.add_team_repo(team_id, org, repo)
 
             with get_session() as session:
                 binding_repo = ProjectAccessBindingRepo(session)

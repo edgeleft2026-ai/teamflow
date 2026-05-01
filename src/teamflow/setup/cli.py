@@ -721,7 +721,7 @@ def _batch_register_prompt(
             org_name=org_name,
             must_change_password=False,
             send_notification=True,
-            add_to_org=bool(org_name),
+            add_to_org=False,
         ))
 
         if not results:

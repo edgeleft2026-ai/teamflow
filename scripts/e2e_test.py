@@ -6,9 +6,9 @@ r"""端到端业务流程测试。
 覆盖范围:
   1. 发送创建项目表单卡片到飞书
   2. 自动模拟一次真实表单提交
-  3. 触发项目创建 + Gitea 自动创建仓库 + 工作空间初始化 + 欢迎消息发送
+  3. 触发项目创建 + Gitea 自动创建仓库 + 工作空间初始化 + Gitea Team 创建 + 欢迎消息发送
   4. 等待同一张进度卡走到最终状态
-  5. 输出结果并自动清理本次创建的飞书资源、Gitea 仓库与数据库记录
+  5. 输出结果并自动清理本次创建的飞书资源、Gitea 仓库/Team 与数据库记录
 """
 
 from __future__ import annotations
@@ -44,6 +44,9 @@ class RunContext:
     gitea_repo_url: str = ""
     gitea_repo_full_name: str = ""
     gitea_auto_created: bool = False
+    gitea_team_id: int | None = None
+    gitea_team_name: str = ""
+    gitea_org_name: str = ""
     cleanup_errors: list[str] | None = None
 
 
@@ -260,7 +263,14 @@ def _cleanup_database(get_session, request_id: str, project_id: str) -> None:
     """删除本次 E2E 产生的数据库记录。"""
     from sqlmodel import select
 
-    from teamflow.storage.models import ActionLog, EventLog, Project, ProjectFormSubmission
+    from teamflow.storage.models import (
+        ActionLog,
+        EventLog,
+        Project,
+        ProjectAccessBinding,
+        ProjectFormSubmission,
+        ProjectMember,
+    )
 
     with get_session() as session:
         submission = session.exec(
@@ -282,6 +292,18 @@ def _cleanup_database(get_session, request_id: str, project_id: str) -> None:
             for row in event_logs:
                 session.delete(row)
 
+            members = session.exec(
+                select(ProjectMember).where(ProjectMember.project_id == project_id)
+            ).all()
+            for row in members:
+                session.delete(row)
+
+            bindings = session.exec(
+                select(ProjectAccessBinding).where(ProjectAccessBinding.project_id == project_id)
+            ).all()
+            for row in bindings:
+                session.delete(row)
+
             project = session.get(Project, project_id)
             if project:
                 session.delete(project)
@@ -294,7 +316,6 @@ async def _delete_gitea_repo(gitea_config, repo_full_name: str) -> None:
     if not repo_full_name or not gitea_config.base_url or not gitea_config.access_token:
         return
 
-    from teamflow.config.settings import GiteaConfig
     from teamflow.git.gitea_service import GiteaService
 
     svc = GiteaService(gitea_config)
@@ -302,9 +323,29 @@ async def _delete_gitea_repo(gitea_config, repo_full_name: str) -> None:
     await svc.close()
 
 
+async def _delete_gitea_team(gitea_config, team_id: int) -> None:
+    """删除 Gitea 上本次 E2E 创建的 Team。"""
+    if not team_id or not gitea_config.base_url or not gitea_config.access_token:
+        return
+
+    from teamflow.git.gitea_service import GiteaService
+
+    svc = GiteaService(gitea_config)
+    await svc.delete_team(team_id)
+    await svc.close()
+
+
 async def _cleanup_run(feishu, get_session, ctx: RunContext, gitea_config=None) -> None:
     """按最佳努力顺序回收飞书资源、Gitea 仓库和数据库记录。"""
     errors = ctx.cleanup_errors if ctx.cleanup_errors is not None else []
+
+    if ctx.gitea_team_id and gitea_config:
+        try:
+            await _delete_gitea_team(gitea_config, ctx.gitea_team_id)
+            ok("已删除 Gitea Team")
+        except Exception as exc:
+            errors.append(f"删除 Gitea Team 失败: {exc}")
+            fail(errors[-1])
 
     if ctx.gitea_auto_created and gitea_config:
         try:
@@ -342,11 +383,13 @@ async def _cleanup_run(feishu, get_session, ctx: RunContext, gitea_config=None) 
     except Exception as exc:
         if ctx.workspace_doc_owner_id and ctx.workspace_doc_owner_id != ctx.user_id:
             errors.append(
-                f"删除项目文档失败: {exc}；当前 owner_id={ctx.workspace_doc_owner_id}，不是管理员 open_id"
+                f"删除项目文档失败: {exc}；"
+                f"当前 owner_id={ctx.workspace_doc_owner_id}，不是管理员 open_id"
             )
         elif ctx.workspace_doc_owner_id == ctx.user_id:
             errors.append(
-                f"删除项目文档失败: {exc}；当前 owner 已是管理员 {ctx.workspace_doc_owner_id}，bot 无删除权限"
+                f"删除项目文档失败: {exc}；"
+                f"当前 owner 已是管理员 {ctx.workspace_doc_owner_id}，bot 无删除权限"
             )
         else:
             errors.append(f"删除项目文档失败: {exc}")
@@ -364,7 +407,7 @@ async def _wait_for_completion(get_session, ctx: RunContext) -> None:
     """等待表单提交记录进入最终状态，并同步项目资源信息。"""
     from sqlmodel import select
 
-    from teamflow.storage.models import Project, ProjectFormSubmission
+    from teamflow.storage.models import Project, ProjectAccessBinding, ProjectFormSubmission
 
     waited = 0
     last_step = ""
@@ -392,6 +435,16 @@ async def _wait_for_completion(get_session, ctx: RunContext) -> None:
                         ctx.gitea_repo_url = project.git_repo_path
                         ctx.gitea_auto_created = True
 
+                binding = session.exec(
+                    select(ProjectAccessBinding).where(
+                        ProjectAccessBinding.project_id == ctx.project_id
+                    )
+                ).first()
+                if binding:
+                    ctx.gitea_team_id = binding.gitea_team_id
+                    ctx.gitea_team_name = binding.gitea_team_name
+                    ctx.gitea_org_name = binding.gitea_org_name
+
             if submission and submission.status in ("succeeded", "partial_failed", "failed"):
                 info(
                     f"流程已收口: submission={submission.status}, "
@@ -412,7 +465,13 @@ def _print_run_snapshot(feishu, get_session, ctx: RunContext) -> None:
     """输出本次运行对应的项目和提交记录。"""
     from sqlmodel import select
 
-    from teamflow.storage.models import ActionLog, EventLog, Project, ProjectFormSubmission
+    from teamflow.storage.models import (
+        ActionLog,
+        EventLog,
+        Project,
+        ProjectAccessBinding,
+        ProjectFormSubmission,
+    )
 
     with get_session() as session:
         submission = session.exec(
@@ -445,6 +504,19 @@ def _print_run_snapshot(feishu, get_session, ctx: RunContext) -> None:
             print()
         else:
             fail("数据库中未找到本次项目记录")
+
+        if ctx.project_id:
+            binding = session.exec(
+                select(ProjectAccessBinding).where(
+                    ProjectAccessBinding.project_id == ctx.project_id
+                )
+            ).first()
+            if binding:
+                print("  Gitea 权限绑定:")
+                print(f"    org:       {binding.gitea_org_name or '—'}")
+                print(f"    team_id:   {binding.gitea_team_id or '—'}")
+                print(f"    team_name: {binding.gitea_team_name or '—'}")
+                print()
 
         if submission:
             print("  提交记录:")
@@ -652,13 +724,11 @@ async def main():
 
         # 从 Gitea repo URL 提取 full_name 用于清理
         if ctx.gitea_auto_created and ctx.gitea_repo_url:
-            from urllib.parse import urlparse
+            from teamflow.orchestration.access_sync import _parse_repo_ref
 
-            parsed = urlparse(ctx.gitea_repo_url)
-            path = parsed.path.strip("/")
-            if path.endswith(".git"):
-                path = path[:-4]
-            ctx.gitea_repo_full_name = path
+            parsed = _parse_repo_ref(ctx.gitea_repo_url)
+            if parsed:
+                ctx.gitea_repo_full_name = f"{parsed[0]}/{parsed[1]}"
             info(f"Gitea 仓库 full_name: {ctx.gitea_repo_full_name}")
 
     finally:
@@ -675,22 +745,53 @@ async def main():
 
     checks: list[tuple[str, bool, str]] = []
 
-    checks.append(("配置加载", bool(feishu.app_id and feishu.app_secret), "飞书 app_id/app_secret 已配置"))
+    checks.append((
+        "配置加载",
+        bool(feishu.app_id and feishu.app_secret),
+        "飞书 app_id/app_secret 已配置",
+    ))
     checks.append(("数据库初始化", True, "SQLite 初始化成功"))
 
     project_ok = ctx.final_submission_status in ("succeeded", "partial_failed")
-    checks.append(("项目创建", project_ok, f"最终状态: {ctx.final_submission_status or 'unknown'}"))
+    checks.append((
+        "项目创建",
+        project_ok,
+        f"最终状态: {ctx.final_submission_status or 'unknown'}",
+    ))
 
-    checks.append(("工作空间初始化", bool(ctx.workspace_chat_id), f"群: {ctx.workspace_chat_id or '—'}"))
-    checks.append(("项目文档创建", bool(ctx.workspace_doc_url), f"文档: {ctx.workspace_doc_url or '—'}"))
+    checks.append((
+        "工作空间初始化",
+        bool(ctx.workspace_chat_id),
+        f"群: {ctx.workspace_chat_id or '—'}",
+    ))
+    checks.append((
+        "项目文档创建",
+        bool(ctx.workspace_doc_url),
+        f"文档: {ctx.workspace_doc_url or '—'}",
+    ))
 
     if gitea_available:
-        checks.append(("Gitea 自动创建仓库", ctx.gitea_auto_created, f"仓库: {ctx.gitea_repo_url or '—'}"))
+        checks.append((
+            "Gitea 自动创建仓库",
+            ctx.gitea_auto_created,
+            f"仓库: {ctx.gitea_repo_url or '—'}",
+        ))
+        checks.append((
+            "Gitea Team 创建",
+            bool(ctx.gitea_team_id),
+            f"team_id: {ctx.gitea_team_id or '—'}, "
+            f"name: {ctx.gitea_team_name or '—'}",
+        ))
     else:
         checks.append(("Gitea 自动创建仓库", True, "未配置，已跳过"))
+        checks.append(("Gitea Team 创建", True, "未配置，已跳过"))
 
     cleanup_ok = not ctx.cleanup_errors
-    checks.append(("资源清理", cleanup_ok, "全部完成" if cleanup_ok else f"{len(ctx.cleanup_errors)} 项失败"))
+    cleanup_detail = (
+        "全部完成" if cleanup_ok
+        else f"{len(ctx.cleanup_errors)} 项失败"
+    )
+    checks.append(("资源清理", cleanup_ok, cleanup_detail))
 
     pass_count = sum(1 for _, ok_flag, _ in checks if ok_flag)
     fail_count = len(checks) - pass_count

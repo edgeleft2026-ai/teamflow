@@ -276,6 +276,16 @@ class GiteaService:
             ))
         return teams
 
+    async def delete_team(self, team_id: int) -> None:
+        """删除组织下的 Team。"""
+        r = await self._client.delete(f"/api/v1/teams/{team_id}")
+        if r.status_code not in (200, 204):
+            raise GiteaServiceError(
+                f"删除 Team 失败 (team={team_id}): {r.text}",
+                r.status_code,
+            )
+        logger.info("已删除 Team: team=%d", team_id)
+
     async def add_team_member(self, team_id: int, username: str) -> None:
         """将用户添加到 Team。"""
         r = await self._client.put(
