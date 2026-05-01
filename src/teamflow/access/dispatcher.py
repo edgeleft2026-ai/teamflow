@@ -91,14 +91,14 @@ class EventDispatcher:
             try:
                 handler(event)
             except Exception:
-                logger.exception("Error in handler for %s", event.event_type)
+                logger.exception("事件处理器异常: %s", event.event_type)
 
         # Call global handlers
         for handler in self._global_handlers:
             try:
                 handler(event)
             except Exception:
-                logger.exception("Error in global handler")
+                logger.exception("全局事件处理器异常")
 
         handled = len(handlers) > 0 or len(self._global_handlers) > 0
         return DispatchResult(
@@ -119,11 +119,11 @@ class EventDispatcher:
                 if isinstance(data, list):
                     self._seen_event_ids = set(data[-self._dedup_max_size:])
                     logger.info(
-                        "Loaded %d seen event IDs from %s",
+                        "已从磁盘加载 %d 条去重事件ID: %s",
                         len(self._seen_event_ids), self._dedup_path,
                     )
         except Exception:
-            logger.warning("Failed to load seen event IDs, starting fresh")
+            logger.warning("加载去重事件ID失败，将从空集合开始")
 
     def _save_seen_ids(self) -> None:
         """Save current seen event IDs to disk."""
@@ -134,5 +134,5 @@ class EventDispatcher:
                 with open(self._dedup_path, "w", encoding="utf-8") as f:
                     json.dump(ids, f)
         except Exception:
-            logger.warning("Failed to persist seen event IDs")
+            logger.warning("持久化去重事件ID失败")
 

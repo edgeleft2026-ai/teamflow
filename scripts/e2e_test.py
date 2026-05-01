@@ -486,6 +486,21 @@ async def main():
     config = load_config()
     feishu = config.feishu
 
+    from teamflow.core.logging import setup_logging
+
+    log_cfg = config.logging
+    setup_logging(
+        level=log_cfg.level,
+        log_dir=log_cfg.log_dir,
+        file_enabled=log_cfg.file_enabled,
+        file_level=log_cfg.file_level,
+        file_max_bytes=log_cfg.file_max_bytes,
+        file_backup_count=log_cfg.file_backup_count,
+        json_format=log_cfg.json_format,
+        color=log_cfg.color,
+        module_levels=log_cfg.module_levels or None,
+    )
+
     info(f"app_id: {feishu.app_id[:8]}...")
     info(f"admin_open_id: {feishu.admin_open_id or '(not set)'}")
     info(f"smart_model: {config.agent.smart_model}")

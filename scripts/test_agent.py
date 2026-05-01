@@ -16,12 +16,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# 添加项目根目录到 path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from teamflow.core.logging import setup_logging
+
+setup_logging(level="INFO", file_enabled=False)
+logger = logging.getLogger("test_agent")
 
 PASS = 0
 FAIL = 0

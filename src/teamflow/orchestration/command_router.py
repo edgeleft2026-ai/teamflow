@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from teamflow.config import FeishuConfig
-from teamflow.config.settings import GiteaConfig, TeamFlowConfig
+from teamflow.config.settings import GiteaConfig
 from teamflow.execution.messages import send_card
 from teamflow.orchestration.card_templates import project_create_form_card, welcome_card
 from teamflow.orchestration.event_bus import EventBus
@@ -46,7 +46,7 @@ class CommandRouter:
             if stripped in _CREATE_TRIGGERS:
                 result = send_card(self.feishu, project_create_form_card(), chat_id=chat_id)
                 if not result.success:
-                    logger.error("Failed to send form card: %s", result.error)
+                    logger.error("发送表单卡片失败: %s", result.error)
                 return
 
         if stripped in _HELP_TRIGGERS:
@@ -68,7 +68,7 @@ class CommandRouter:
             if teamflow_action == "submit_project_form":
                 return flow.submit_form(card_data)
 
-        logger.warning("Unknown card action: %s", teamflow_action)
+        logger.warning("未知的卡片操作: %s", teamflow_action)
         return CardActionHandleResult(
             toast_type="error",
             toast_text="未识别的卡片操作",

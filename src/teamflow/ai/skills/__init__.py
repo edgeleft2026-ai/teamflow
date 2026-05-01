@@ -73,7 +73,7 @@ class Skill:
                         return True
                 except re.error:
                     logger.warning(
-                        "Skill %s has invalid regex trigger: %s", self.name, trigger
+                        "技能 %s 的正则触发器无效: %s", self.name, trigger
                     )
                     continue
             elif trigger.lower() in lower:
@@ -111,9 +111,9 @@ class SkillRegistry:
     def register(self, skill: Skill) -> None:
         """Register a skill. Replaces any existing skill with the same name."""
         if skill.name in self._skills:
-            logger.warning("Skill %s is being replaced", skill.name)
+            logger.warning("技能 %s 被替换", skill.name)
         self._skills[skill.name] = skill
-        logger.info("Registered skill: %s", skill.name)
+        logger.info("已注册技能: %s", skill.name)
 
     def get(self, name: str) -> Skill | None:
         """Look up a skill by name."""
@@ -126,7 +126,7 @@ class SkillRegistry:
         """
         for skill in self._skills.values():
             if skill.matches(description):
-                logger.info("Skill matched: %s", skill.name)
+                logger.info("技能匹配: %s", skill.name)
                 return skill
         return None
 
@@ -182,7 +182,7 @@ class SkillRegistry:
                     self.register(skill)
                     count += 1
             except Exception:
-                logger.exception("Failed to load skill from %s", skill_md)
+                logger.exception("加载技能文件失败: %s", skill_md)
 
         return count
 
@@ -193,7 +193,7 @@ class SkillRegistry:
         # Split frontmatter from body
         meta, body = _parse_frontmatter(text)
         if not meta.get("name"):
-            logger.warning("SKILL.md at %s has no 'name' in frontmatter, skipping", path)
+            logger.warning("SKILL.md %s 缺少 'name' 前置元数据，跳过", path)
             return None
 
         # Parse triggers — support both YAML list and inline names
@@ -358,12 +358,12 @@ def _discover_all_skills() -> None:
     """Scan all skill directories and register discovered skills."""
     # Built-in skills (project)
     builtin_count = registry.discover_from_dir(_BUILTIN_SKILLS_DIR)
-    logger.info("Discovered %d built-in skills from %s", builtin_count, _BUILTIN_SKILLS_DIR)
+    logger.info("从 %s 发现 %d 个内置技能", builtin_count, _BUILTIN_SKILLS_DIR)
 
     # User skills (~/.teamflow/skills/)
     if _USER_SKILLS_DIR.is_dir():
         user_count = registry.discover_from_dir(_USER_SKILLS_DIR)
-        logger.info("Discovered %d user skills from %s", user_count, _USER_SKILLS_DIR)
+        logger.info("从 %s 发现 %d 个用户技能", user_count, _USER_SKILLS_DIR)
 
 
 # Run discovery at import time.

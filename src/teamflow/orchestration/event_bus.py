@@ -38,7 +38,7 @@ class EventBus:
         payload: dict | None = None,
     ) -> EventLog | None:
         if self.repo.exists_by_idempotency_key(idempotency_key):
-            logger.info("Event deduped: %s (key=%s)", event_type, idempotency_key)
+            logger.info("事件已去重: %s (key=%s)", event_type, idempotency_key)
             return None
 
         event = self.repo.create(
@@ -48,7 +48,7 @@ class EventBus:
             source=source,
             payload=payload,
         )
-        logger.info("Event published: %s (id=%s)", event_type, event.id[:8])
+        logger.info("事件已发布: %s (id=%s)", event_type, event.id[:8])
 
         handlers = self._handlers.get(event_type, []) + self._global_handlers.get(
             event_type, []
@@ -57,6 +57,6 @@ class EventBus:
             try:
                 handler(event)
             except Exception:
-                logger.exception("Error in event handler for %s", event_type)
+                logger.exception("事件处理器执行异常: %s", event_type)
 
         return event

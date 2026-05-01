@@ -541,16 +541,16 @@ def fetch_models_dev(force: bool = False) -> dict[str, Any]:
             _models_dev_data = data
             _models_dev_fetch_time = time.time()
             _save_disk_cache(data)
-            logger.info("Fetched models.dev: %d providers", len(data))
+            logger.info("已获取 models.dev 数据: %d 个提供商", len(data))
             return data
     except Exception as e:
-        logger.debug("models.dev fetch failed: %s", e)
+        logger.debug("获取 models.dev 失败: %s", e)
 
     if not _models_dev_data:
         _models_dev_data = _load_disk_cache()
         if _models_dev_data:
             _models_dev_fetch_time = time.time()
-            logger.info("Loaded models.dev from disk cache")
+            logger.info("已从磁盘缓存加载 models.dev 数据")
     return _models_dev_data
 
 

@@ -76,17 +76,17 @@ class ToolProvider:
         if tool.handler is None:
             return {"success": False, "result": None, "error": f"Tool {name} has no handler"}
 
-        logger.info("Tool call: %s args=%s", name, arguments)
+        logger.info("工具调用: %s args=%s", name, arguments)
         try:
             result = await tool.handler(**arguments)
-            logger.info("Tool %s succeeded", name)
+            logger.info("工具 %s 调用成功", name)
             return {
                 "success": True,
                 "result": [json.dumps(result, ensure_ascii=False)],
                 "error": None,
             }
         except Exception as e:
-            logger.error("Tool %s failed: %s", name, e)
+            logger.error("工具 %s 调用失败: %s", name, e)
             return {"success": False, "result": None, "error": str(e)}
 
     async def disconnect(self) -> None:

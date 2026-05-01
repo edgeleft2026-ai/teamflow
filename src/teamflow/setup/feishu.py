@@ -312,14 +312,14 @@ def _poll_registration(
         if error in ("access_denied", "expired_token"):
             if poll_count > 0:
                 print()
-            logger.warning("Registration %s", error)
+            logger.warning("注册失败: %s", error)
             return None
 
         time.sleep(interval)
 
     if poll_count > 0:
         print()
-    logger.warning("Registration timed out after %ds", expire_in)
+    logger.warning("注册超时 (%d秒)", expire_in)
     return None
 
 
@@ -375,7 +375,7 @@ def probe_bot(app_id: str, app_secret: str, domain: str) -> dict | None:
             "bot_open_id": bot_info.get("open_id", ""),
         }
     except (URLError, OSError, KeyError, json.JSONDecodeError) as exc:
-        logger.debug("Bot probe failed: %s", exc)
+        logger.debug("机器人探测失败: %s", exc)
         return None
 
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from teamflow.config import FeishuConfig
 from teamflow.execution.cli import CLIResult, run_cli
+
+logger = logging.getLogger(__name__)
 
 
 def send_message(
@@ -43,7 +46,10 @@ def send_message(
     if idempotency_key:
         args += ["--idempotency-key", idempotency_key]
 
-    return run_cli(args, feishu=feishu, cli_binary=cli_binary)
+    result = run_cli(args, feishu=feishu, cli_binary=cli_binary)
+    if not result.success:
+        logger.warning("发送消息失败: %s", result.error)
+    return result
 
 
 def send_text(
@@ -106,6 +112,7 @@ def update_card_message(
         .build()
     resp = client.im.v1.message.patch(req)
     if not resp.success():
+        logger.warning("更新卡片消息失败: %s (%s)", resp.msg, resp.code)
         return CLIResult(success=False, error=f"{resp.msg} ({resp.code})")
     return CLIResult(success=True)
 

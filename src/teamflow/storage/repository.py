@@ -32,10 +32,14 @@ class ProjectRepo:
         )
         self.session.add(project)
         self.session.flush()
+        logger.info("创建项目记录: name=%s id=%s", name, project.id[:8])
         return project
 
     def get_by_id(self, project_id: str) -> Project | None:
-        return self.session.get(Project, project_id)
+        result = self.session.get(Project, project_id)
+        if not result:
+            logger.debug("项目未找到: %s", project_id[:8])
+        return result
 
     def update_status(self, project_id: str, status: str) -> Project | None:
         project = self.get_by_id(project_id)
@@ -230,6 +234,7 @@ class EventLogRepo:
         )
         self.session.add(event)
         self.session.flush()
+        logger.info("创建事件日志: type=%s id=%s", event_type, event.id[:8])
         return event
 
     def exists_by_idempotency_key(self, key: str) -> bool:

@@ -131,7 +131,7 @@ class ProjectCreateFlow:
         elif state == STATE_CREATING:
             send_text(self.feishu, "项目正在创建中，请稍候...", chat_id=chat_id)
         else:
-            logger.warning("Unexpected conversation state: %s", state)
+            logger.warning("未预期的会话状态: %s", state)
             self.conv_repo.delete(conv.id)
 
     def submit_form(self, card_data: CardActionData) -> CardActionHandleResult:
@@ -278,7 +278,7 @@ class ProjectCreateFlow:
             )
 
         except Exception as exc:
-            logger.exception("Project creation failed for open_id=%s", open_id)
+            logger.exception("项目创建失败: open_id=%s", open_id)
             self.action_repo.create(
                 action_name="project_flow.create_project",
                 target=open_id,
@@ -310,10 +310,10 @@ class ProjectCreateFlow:
                 git_repo_auto_created=True,
             )
             self.session.commit()
-            logger.info("Auto-created Gitea repo: %s -> %s", project.name, result.clone_url)
+            logger.info("自动创建 Gitea 仓库成功: %s -> %s", project.name, result.clone_url)
             return result.clone_url
         except Exception as exc:
-            logger.warning("Auto-create Gitea repo failed for project %s: %s", project.id, exc)
+            logger.warning("自动创建 Gitea 仓库失败: 项目 %s, %s", project.id, exc)
             return None
 
     def _start_submission_worker(self, request_id: str) -> None:
@@ -333,7 +333,7 @@ class ProjectCreateFlow:
     def _process_submission(self, request_id: str) -> None:
         submission = self.submission_repo.get_by_request_id(request_id)
         if not submission:
-            logger.warning("Form submission not found: %s", request_id)
+            logger.warning("表单提交未找到: %s", request_id)
             return
 
         steps = self._load_submission_steps(submission)
@@ -486,7 +486,7 @@ class ProjectCreateFlow:
                 project_id=project.id,
             )
         except Exception as exc:
-            logger.exception("Project form submission failed: request_id=%s", request_id)
+            logger.exception("项目表单提交处理失败: request_id=%s", request_id)
             self.session.rollback()
 
             submission = self.submission_repo.get_by_request_id(request_id)
@@ -588,7 +588,7 @@ class ProjectCreateFlow:
         try:
             steps = json.loads(submission.steps_payload)
         except json.JSONDecodeError:
-            logger.warning("Invalid submission steps payload: %s", submission.request_id)
+            logger.warning("无效的提交步骤数据: %s", submission.request_id)
             return self._build_initial_steps()
         return steps if isinstance(steps, list) else self._build_initial_steps()
 
@@ -614,4 +614,4 @@ class ProjectCreateFlow:
 
         result = update_card_message(self.feishu, open_message_id, card)
         if not result.success:
-            logger.warning("Failed to update submission card: %s", result.error)
+            logger.warning("更新提交卡片失败: %s", result.error)

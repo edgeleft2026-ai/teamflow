@@ -36,10 +36,25 @@ class GiteaConfig(BaseModel):
     auto_create: bool = True
 
 
+class LoggingConfig(BaseModel):
+    """Logging configuration for production-grade log management."""
+
+    level: str = "INFO"
+    log_dir: str = "logs"
+    file_enabled: bool = True
+    file_level: str = "DEBUG"
+    file_max_bytes: int = 10 * 1024 * 1024
+    file_backup_count: int = 5
+    json_format: bool = False
+    color: bool = True
+    module_levels: dict[str, str] = {}
+
+
 class TeamFlowConfig(BaseModel):
     feishu: FeishuConfig
     agent: AgentConfig = AgentConfig()
     gitea: GiteaConfig = GiteaConfig()
+    logging: LoggingConfig = LoggingConfig()
 
 
 def load_config(path: Path | str | None = None) -> TeamFlowConfig:

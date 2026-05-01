@@ -59,11 +59,11 @@ def start_callback_client(
     def on_card_action(data: P2CardActionTrigger) -> P2CardActionTriggerResponse:
         card_data = _build_card_action_data(data)
         if card_data is None:
-            logger.warning("Incomplete card callback data, skipping")
+            logger.warning("卡片回调数据不完整，跳过")
             return P2CardActionTriggerResponse()
 
         logger.info(
-            "Card callback: chat=%s user=%s tag=%s",
+            "收到卡片回调: chat=%s user=%s tag=%s",
             card_data.chat_id, card_data.open_id, card_data.action_tag,
         )
 
@@ -71,7 +71,7 @@ def start_callback_client(
         try:
             result = router.handle_card_action(card_data)
         except Exception:
-            logger.exception("Card callback handler error")
+            logger.exception("卡片回调处理异常")
 
         resp = P2CardActionTriggerResponse()
         resp.toast = CallBackToast()
@@ -111,11 +111,11 @@ def start_callback_thread(
     client = start_callback_client(app_id, app_secret, brand, router)
 
     def _run():
-        logger.info("Card callback WebSocket client starting...")
+        logger.info("卡片回调 WebSocket 客户端启动中...")
         client.start()
 
     thread = threading.Thread(target=_run, daemon=True, name="card-callback")
     thread.start()
-    logger.info("Card callback thread started")
+    logger.info("卡片回调线程已启动")
 
     return client

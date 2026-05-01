@@ -53,9 +53,9 @@ async def _send_text_receipt_async(feishu, project, steps: list[dict]) -> None:
         lines.append(f"  {icon} {s.get('name', '?')}: {s.get('detail', '')}")
     result = await send_text_async(feishu, "\n".join(lines), user_id=project.admin_open_id)
     if result.success:
-        logger.info("Admin text receipt sent OK")
+        logger.info("管理员文本回执发送成功")
     else:
-        logger.error("Admin text receipt also failed: %s", result.error)
+        logger.error("管理员文本回执也发送失败: %s", result.error)
 
 
 class WorkspaceInitFlow:
@@ -83,7 +83,7 @@ class WorkspaceInitFlow:
         project_id = event.project_id
         event_id = event.id
         if not project_id:
-            logger.error("Event %s has no project_id, skipping", event_id[:8])
+            logger.error("事件 %s 缺少 project_id，跳过", event_id[:8])
             return
 
         try:
@@ -100,7 +100,7 @@ class WorkspaceInitFlow:
         try:
             loop.create_task(self._run(project_id, event_id))
         except Exception:
-            logger.exception("Failed to start workspace init async task")
+            logger.exception("启动工作空间初始化异步任务失败")
 
     async def _run(self, project_id: str, event_id: str) -> None:
         with self.session_factory() as session:
@@ -112,7 +112,7 @@ class WorkspaceInitFlow:
             # 1. Load project
             project = project_repo.get_by_id(project_id)
             if not project:
-                logger.error("Project not found: %s", project_id[:8])
+                logger.error("项目未找到: %s", project_id[:8])
                 return
 
             # 2. Idempotency: skip if already fully initialized
@@ -121,7 +121,7 @@ class WorkspaceInitFlow:
                 WorkspaceStatus.partial_failed,
             ):
                 logger.info(
-                    "Project %s workspace already initialized (%s), skipping",
+                    "项目 %s 工作空间已初始化 (%s)，跳过",
                     project.id[:8],
                     project.workspace_status,
                 )
@@ -183,7 +183,7 @@ class WorkspaceInitFlow:
                 group_link = agent_out.get("group_link") or group_link
                 agent_ok = agent_out.get("agent_success", False)
             except Exception:
-                logger.exception("Agent channel crashed")
+                logger.exception("Agent 通道崩溃")
                 agent_ok = False
                 action_repo.create(
                     action_name="workspace_init.agent",
@@ -224,7 +224,7 @@ class WorkspaceInitFlow:
                     document_id = fallback.get("document_id") or document_id
                     group_link = fallback.get("group_link") or group_link
                 except Exception:
-                    logger.exception("Deterministic channel also crashed")
+                    logger.exception("降级通道也崩溃")
                     steps.append(
                         {
                             "name": _STEP_CREATE_CHAT,
@@ -288,7 +288,7 @@ class WorkspaceInitFlow:
                     project_id=project.id,
                 )
 
-            # 7. Admin receipt — if the create card is linked, use that as the single source of truth.
+            # 7. 管理员回执 — 如果创建卡片已关联，以卡片为唯一信息源
             if not submission:
                 try:
                     receipt = await send_card_async(
@@ -297,10 +297,10 @@ class WorkspaceInitFlow:
                         user_id=project.admin_open_id,
                     )
                     if not receipt.success:
-                        logger.warning("Admin receipt card failed, trying text: %s", receipt.error)
+                        logger.warning("管理员回执卡片发送失败，尝试文本: %s", receipt.error)
                         await _send_text_receipt_async(self.feishu, project, steps)
                 except Exception:
-                    logger.exception("Failed to send admin receipt, trying text fallback")
+                    logger.exception("发送管理员回执失败，尝试文本降级")
                     await _send_text_receipt_async(self.feishu, project, steps)
 
             # 8. Publish workspace_initialized event
@@ -426,7 +426,6 @@ class WorkspaceInitFlow:
                     chat_id = result_data.get("chat_id")
                     await record_step(
                         {
-                            "name": "创建项目群",
                             "name": _STEP_CREATE_CHAT,
                             "status": "success",
                             "detail": f"群ID: {chat_id}",
@@ -563,7 +562,7 @@ class WorkspaceInitFlow:
                     }
                 )
             except Exception as e:
-                logger.exception("Failed to create chat")
+                logger.exception("创建项目群失败")
                 await record_step(
                     {"name": _STEP_CREATE_CHAT, "status": "failure", "detail": str(e)}
                 )
@@ -580,7 +579,7 @@ class WorkspaceInitFlow:
                     }
                 )
             except Exception as e:
-                logger.exception("Failed to add admin to chat")
+                logger.exception("添加管理员入群失败")
                 await record_step(
                     {
                         "name": _STEP_ADD_ADMIN,
@@ -602,7 +601,7 @@ class WorkspaceInitFlow:
                     }
                 )
             except Exception as e:
-                logger.warning("Failed to get chat link: %s", e)
+                logger.warning("获取群链接失败: %s", e)
                 await record_step(
                     {
                         "name": _STEP_GET_CHAT_LINK,
@@ -625,7 +624,7 @@ class WorkspaceInitFlow:
                     }
                 )
             except Exception as e:
-                logger.exception("Failed to create document")
+                logger.exception("创建项目文档失败")
                 await record_step(
                     {
                         "name": _STEP_CREATE_DOC,
@@ -646,7 +645,7 @@ class WorkspaceInitFlow:
         try:
             steps = json.loads(submission.steps_payload)
         except json.JSONDecodeError:
-            logger.warning("Invalid submission steps payload: %s", submission.request_id)
+            logger.warning("无效的提交步骤数据: %s", submission.request_id)
             return []
         return steps if isinstance(steps, list) else []
 
@@ -690,7 +689,7 @@ class WorkspaceInitFlow:
             )
             return True
         except Exception as exc:
-            logger.warning("Failed to transfer document owner: %s", exc)
+            logger.warning("转交文档所有者失败: %s", exc)
             await report_step(
                 {
                     "name": _STEP_TRANSFER_DOC_OWNER,
@@ -739,7 +738,7 @@ class WorkspaceInitFlow:
             card,
         )
         if not result.success:
-            logger.warning("Failed to update submission card in workspace flow: %s", result.error)
+            logger.warning("更新提交卡片失败: %s", result.error)
 
     async def _send_group_welcome(
         self,
@@ -762,7 +761,7 @@ class WorkspaceInitFlow:
                 chat_id=chat_id,
             )
             if not welcome.success:
-                logger.warning("Welcome card failed, trying text: %s", welcome.error)
+                logger.warning("欢迎卡片发送失败，尝试文本: %s", welcome.error)
                 txt = f"欢迎来到 {project_name} 项目！\n这是 TeamFlow AI 协作空间。"
                 if doc_url:
                     txt += f"\n项目文档: {doc_url}"
@@ -784,7 +783,7 @@ class WorkspaceInitFlow:
                 "detail": "已发送",
             }
         except Exception as exc:
-            logger.exception("Failed to send group welcome")
+            logger.exception("发送群欢迎消息失败")
             return {
                 "name": _STEP_WELCOME,
                 "status": "failure",

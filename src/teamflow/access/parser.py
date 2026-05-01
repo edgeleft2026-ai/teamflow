@@ -45,7 +45,7 @@ def parse_ndjson_line(line: str) -> FeishuEvent | None:
     try:
         data = json.loads(line)
     except json.JSONDecodeError:
-        logger.warning("Failed to parse NDJSON line: %s", line[:200])
+        logger.warning("NDJSON 行解析失败: %s", line[:200])
         return None
 
     if not isinstance(data, dict):

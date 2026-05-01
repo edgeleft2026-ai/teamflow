@@ -29,13 +29,13 @@ class EventFileWatcher:
         self._running = True
         self.watch_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Watching event directory: %s", self.watch_dir)
+        logger.info("正在监视事件目录: %s", self.watch_dir)
 
         while self._running:
             try:
                 await self._scan_files(callback)
             except Exception:
-                logger.exception("Error scanning event files")
+                logger.exception("扫描事件文件异常")
             await asyncio.sleep(self.poll_interval)
 
     def stop(self) -> None:
@@ -73,7 +73,7 @@ class EventFileWatcher:
                             callback(line)
                 self._file_positions[key] = f.tell()
         except OSError:
-            logger.debug("Failed to read event file %s", path)
+            logger.debug("读取事件文件失败: %s", path)
 
 
 def list_existing_events(watch_dir: Path) -> list[str]:

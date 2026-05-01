@@ -122,7 +122,7 @@ def _exchange_tenant_token(feishu: FeishuConfig) -> str:
 
     expire = result.get("expire", 7200)
     _token_cache[cache_key] = _CachedToken(token=token, expires_at=time.time() + expire - 60)
-    logger.debug("Tenant token refreshed, expires in %ds", expire)
+    logger.debug("租户令牌已刷新，%d 秒后过期", expire)
     return token
 
 
@@ -158,7 +158,7 @@ def run_cli(
     cmd = [binary, *args]
     env = _build_env(feishu)
 
-    logger.debug("Running CLI: %s", " ".join(cmd))
+    logger.debug("执行 CLI 命令: %s", " ".join(cmd))
 
     try:
         proc = subprocess.run(

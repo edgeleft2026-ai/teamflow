@@ -32,7 +32,7 @@ def init_feishu_client(app_id: str, app_secret: str, brand: str = "feishu") -> N
         .domain(base_url) \
         .log_level(lark.LogLevel.INFO) \
         .build()
-    logger.info("Feishu client initialized (brand=%s)", brand)
+    logger.info("飞书客户端已初始化 (brand=%s)", brand)
 
 
 # ── IM: Chat tools ────────────────────────────────────────────────────────

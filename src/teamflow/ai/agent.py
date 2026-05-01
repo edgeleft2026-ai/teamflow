@@ -113,8 +113,7 @@ class AgentExecutor:
         caps = get_model_capabilities(provider_name, model_name)
         if not caps.get("supports_tools", True):
             logger.error(
-                "Model %s/%s does not support tool calling. "
-                "Agent execution will likely fail.",
+                "模型 %s/%s 不支持工具调用，Agent 执行可能会失败",
                 provider_name,
                 model_name,
             )
@@ -155,7 +154,7 @@ class AgentExecutor:
         reasoning_log: list[str] = []
 
         logger.info(
-            "Agent start: model=%s api_mode=%s provider=%s max_iterations=%d tools=%d",
+            "Agent 启动: model=%s api_mode=%s provider=%s max_iterations=%d tools=%d",
             model,
             api_mode,
             provider_name,
@@ -166,7 +165,7 @@ class AgentExecutor:
         try:
             while iteration < task.max_iterations:
                 iteration += 1
-                logger.info("Agent iteration %d/%d", iteration, task.max_iterations)
+                logger.info("Agent 迭代 %d/%d", iteration, task.max_iterations)
 
                 # Build LiteLLM kwargs
                 litellm_kwargs: dict = {
@@ -224,7 +223,7 @@ class AgentExecutor:
                             }
                         )
 
-                        logger.info("Agent tool_call: %s args=%s", tc_name, parsed_args)
+                        logger.info("Agent 工具调用: %s args=%s", tc_name, parsed_args)
                         tool_result = await self._mcp.call_tool(tc_name, parsed_args)
                         actions.append(
                             {
@@ -248,7 +247,7 @@ class AgentExecutor:
                     messages.extend(tool_results)
                 else:
                     content = normalized.content or ""
-                    logger.info("Agent finished after %d iterations", iteration)
+                    logger.info("Agent 在 %d 次迭代后完成", iteration)
 
                     # Include reasoning log in the result data
                     result_data: dict = {}
@@ -263,7 +262,7 @@ class AgentExecutor:
                     )
 
             # Max iterations reached
-            logger.warning("Agent hit max_iterations (%d)", task.max_iterations)
+            logger.warning("Agent 达到最大迭代次数 (%d)", task.max_iterations)
             return AgentResult(
                 success=False,
                 summary="Agent reached maximum iterations without completing the task.",
@@ -272,7 +271,7 @@ class AgentExecutor:
             )
 
         except TimeoutError:
-            logger.error("Agent task timed out")
+            logger.error("Agent 任务超时")
             return AgentResult(
                 success=False,
                 summary="Agent task timed out.",
@@ -280,7 +279,7 @@ class AgentExecutor:
                 error="timeout",
             )
         except Exception as e:
-            logger.exception("Agent task failed with exception")
+            logger.exception("Agent 任务执行异常")
             return AgentResult(
                 success=False,
                 summary=f"Agent task failed: {e}",
@@ -317,7 +316,7 @@ def _build_system_prompt(task: AgentTask) -> str:
             skill_prompt = skill.system_prompt.format(**ctx)
         except KeyError as e:
             logger.warning(
-                "Skill %s: missing context var %s, using raw prompt",
+                "技能 %s: 缺少上下文变量 %s，使用原始提示词",
                 skill.name, e,
             )
             skill_prompt = skill.system_prompt

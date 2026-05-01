@@ -129,9 +129,9 @@ class GiteaService:
         try:
             user = await self.get_current_user()
             logger.info(
-                "Gitea token valid, user=%s (admin=%s)", user.username, user.is_admin
+                "Gitea 令牌有效, user=%s (admin=%s)", user.username, user.is_admin
             )
             return True
         except GiteaServiceError:
-            logger.warning("Gitea token invalid or unreachable")
+            logger.warning("Gitea 令牌无效或不可达")
             return False

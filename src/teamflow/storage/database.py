@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from pathlib import Path
 
 from sqlmodel import Session, SQLModel, create_engine
+
+logger = logging.getLogger(__name__)
 
 _engine = None
 
@@ -32,6 +35,7 @@ def init_db(db_path: str | None = None) -> None:
     )
 
     SQLModel.metadata.create_all(_engine)
+    logger.info("数据库初始化完成: %s", path)
 
 
 def get_engine():
@@ -50,6 +54,7 @@ def get_session():
         session.commit()
     except Exception:
         session.rollback()
+        logger.warning("数据库会话异常，已回滚事务")
         raise
     finally:
         session.close()

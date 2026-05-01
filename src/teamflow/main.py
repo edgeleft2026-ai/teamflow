@@ -17,20 +17,15 @@ from teamflow.access.parser import (
 )
 from teamflow.ai.agent import AgentExecutor
 from teamflow.config import load_config
+from teamflow.core.logging import setup_logging
 from teamflow.execution.cli import find_cli_binary
 from teamflow.orchestration.command_router import CommandRouter
 from teamflow.orchestration.event_bus import EventBus
 from teamflow.orchestration.workspace_flow import WorkspaceInitFlow
 from teamflow.storage.database import get_session, init_db
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 logger = logging.getLogger("teamflow")
 
-# 抑制第三方库的无害警告（非错误，不影响功能）
 warnings.filterwarnings("ignore", message=".*urllib3.*")
 warnings.filterwarnings("ignore", message=".*chardet.*")
 
@@ -73,7 +68,7 @@ def start_event_subscriber(
     env["LARKSUITE_CLI_APP_SECRET"] = feishu_app_secret
     env["LARKSUITE_CLI_BRAND"] = feishu_brand
 
-    logger.info("Starting event subscriber: %s", " ".join(cmd))
+    logger.info("启动事件订阅进程: %s", " ".join(cmd))
     proc = subprocess.Popen(
         cmd,
         env=env,
@@ -94,10 +89,10 @@ def handle_message_event(event: FeishuEvent, router: CommandRouter, bot_app_id: 
     open_id = extract_open_id(event)
 
     if not text or not chat_id or not open_id:
-        logger.warning("Incomplete message context, skipping")
+        logger.warning("消息上下文不完整，跳过")
         return
 
-    logger.info("Message received: chat=%s user=%s text=%s", chat_id, open_id, text[:100])
+    logger.info("收到消息: chat=%s user=%s text=%s", chat_id, open_id, text[:100])
     router.handle(text=text, open_id=open_id, chat_id=chat_id)
 
 
@@ -105,17 +100,17 @@ def handle_card_action_event(event: FeishuEvent, router: CommandRouter) -> None:
     """Handle card.action.trigger events: parse and route to CommandRouter."""
     card_data = extract_card_action_data(event)
     if card_data is None:
-        logger.warning("Incomplete card action data, skipping")
+        logger.warning("卡片回调数据不完整，跳过")
         return
 
     logger.info(
-        "Card action: chat=%s user=%s tag=%s",
+        "收到卡片操作: chat=%s user=%s tag=%s",
         card_data.chat_id, card_data.open_id, card_data.action_tag,
     )
     try:
         router.handle_card_action(card_data)
     except Exception:
-        logger.exception("Card action handler error")
+        logger.exception("卡片操作处理异常")
 
 
 async def _start_health_server(host: str = "127.0.0.1", port: int = 8080):
@@ -135,7 +130,7 @@ async def _start_health_server(host: str = "127.0.0.1", port: int = 8080):
                 self.end_headers()
 
         def log_message(self, format, *args):
-            logger.debug("Health server: %s", format % args)
+            logger.debug("健康检查服务: %s", format % args)
 
     server = HTTPServer((host, port), HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -147,11 +142,24 @@ async def main() -> None:
     config = load_config()
     feishu = config.feishu
 
-    logger.info("TeamFlow starting (app_id=%s, brand=%s)", feishu.app_id[:8] + "...", feishu.brand)
+    log_cfg = config.logging
+    setup_logging(
+        level=log_cfg.level,
+        log_dir=log_cfg.log_dir,
+        file_enabled=log_cfg.file_enabled,
+        file_level=log_cfg.file_level,
+        file_max_bytes=log_cfg.file_max_bytes,
+        file_backup_count=log_cfg.file_backup_count,
+        json_format=log_cfg.json_format,
+        color=log_cfg.color,
+        module_levels=log_cfg.module_levels or None,
+    )
+
+    logger.info("TeamFlow 启动中 (app_id=%s, brand=%s)", feishu.app_id[:8] + "...", feishu.brand)
 
     # Initialize database
     init_db()
-    logger.info("Database initialized")
+    logger.info("数据库初始化完成")
 
     # Create command router
     router = CommandRouter(feishu, gitea_config=config.gitea)
@@ -167,11 +175,11 @@ async def main() -> None:
             user_id=feishu.admin_open_id,
         )
         if result.success:
-            logger.info("Startup self-test: message sent to admin OK")
+            logger.info("启动自检: 管理员通知发送成功")
         else:
-            logger.error("Startup self-test FAILED: %s", result.error)
+            logger.error("启动自检失败: %s", result.error)
     else:
-        logger.warning("admin_open_id not configured, skipping startup self-test")
+        logger.warning("未配置 admin_open_id，跳过启动自检")
 
     # Resolve paths
     cli_binary = os.getenv("LARK_CLI_BINARY")
@@ -189,19 +197,19 @@ async def main() -> None:
         event_types=event_types,
         cli_binary=cli_binary,
     )
-    logger.info("Event subscriber started (pid=%d)", subscriber.pid)
+    logger.info("事件订阅进程已启动 (pid=%d)", subscriber.pid)
 
     # Wait briefly and check subscriber health
     await asyncio.sleep(3)
     if subscriber.poll() is not None:
         stderr_output = subscriber.stderr.read() if subscriber.stderr else ""
         logger.error(
-            "Event subscriber crashed immediately (code=%d): %s",
+            "事件订阅进程启动后立即退出 (code=%d): %s",
             subscriber.returncode,
             stderr_output[:500],
         )
         return
-    logger.info("Event subscriber is running")
+    logger.info("事件订阅进程运行中")
 
     # Initialize Agent tool provider with Feishu API client
     tool_provider = None
@@ -229,15 +237,15 @@ async def main() -> None:
         # Validate configured model supports tool calling
         if not agent_executor.validate_model("smart"):
             logger.warning(
-                "Smart model may not support tool calling. "
-                "Check agent.fast_model/smart_model/reasoning_model in config.yaml."
+                "Smart 模型可能不支持工具调用，"
+                "请检查 config.yaml 中的 agent.fast_model/smart_model/reasoning_model 配置"
             )
         logger.info(
-            "Agent smart channel ready (%d tools registered)",
+            "Agent 智能通道就绪 (已注册 %d 个工具)",
             len(tool_provider.tools),
         )
     except Exception:
-        logger.exception("Agent tool provider init failed, smart channel disabled")
+        logger.exception("Agent 工具提供者初始化失败，智能通道已禁用")
 
     # Register workspace init event handler
     if agent_executor:
@@ -250,9 +258,9 @@ async def main() -> None:
         EventBus.subscribe_global(
             "project.created", workspace_flow.on_project_created
         )
-        logger.info("Workspace init handler registered")
+        logger.info("工作空间初始化处理器已注册")
     else:
-        logger.warning("Agent executor not available, workspace init disabled")
+        logger.warning("Agent 执行器不可用，工作空间初始化已禁用")
 
     # Set up event dispatcher — all events come through lark-cli's single WebSocket
     dispatcher = EventDispatcher()
@@ -262,7 +270,7 @@ async def main() -> None:
     # Log all events
     def log_event(event: FeishuEvent) -> None:
         eid = event.event_id[:16] if event.event_id else "?"
-        logger.info("Event: %s (id=%s)", event.event_type, eid)
+        logger.info("收到事件: %s (id=%s)", event.event_type, eid)
 
     dispatcher.on_any(log_event)
 
@@ -272,13 +280,13 @@ async def main() -> None:
     # Start health check server
     health_port = int(os.getenv("TEAMFLOW_HEALTH_PORT", "9090"))
     health_server = await _start_health_server(port=health_port)
-    logger.info("Health check at http://127.0.0.1:%d/health", health_port)
+    logger.info("健康检查服务已启动: http://127.0.0.1:%d/health", health_port)
 
     # Shutdown signal
     stop_event = asyncio.Event()
 
     def signal_handler(sig, frame):
-        logger.info("Received signal %s, shutting down...", sig)
+        logger.info("收到信号 %s，正在关闭...", sig)
         stop_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -287,7 +295,7 @@ async def main() -> None:
     # Main loop: watch events
     async def watch_loop():
         def on_raw_line(line: str) -> None:
-            logger.info("Watcher read line: %s", line[:120])
+            logger.info("文件监视器读取到数据: %s", line[:120])
             dispatcher.dispatch_raw(line)
 
         await watcher.watch(on_raw_line)
@@ -303,7 +311,7 @@ async def main() -> None:
                 stdout = subscriber.stdout.read() if subscriber.stdout else ""
                 stderr = subscriber.stderr.read() if subscriber.stderr else ""
                 logger.error(
-                    "Event subscriber exited (code=%d). stdout=%s stderr=%s",
+                    "事件订阅进程已退出 (code=%d). stdout=%s stderr=%s",
                     retcode,
                     stdout[:200],
                     stderr[:500],
@@ -311,7 +319,7 @@ async def main() -> None:
                 break
             await asyncio.sleep(1)
     finally:
-        logger.info("Shutting down...")
+        logger.info("正在关闭...")
         watcher.stop()
         watch_task.cancel()
         health_server.shutdown()
@@ -319,14 +327,14 @@ async def main() -> None:
             try:
                 await asyncio.wait_for(tool_provider.disconnect(), timeout=5)
             except Exception:
-                logger.warning("Tool provider cleanup failed, forcing shutdown")
+                logger.warning("工具提供者清理超时，强制关闭")
         if subscriber.poll() is None:
             subscriber.terminate()
             try:
                 subscriber.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 subscriber.kill()
-        logger.info("TeamFlow stopped.")
+        logger.info("TeamFlow 已停止.")
         os._exit(0)
 
 
