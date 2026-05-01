@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from teamflow.ai.agent import AgentExecutor
 from teamflow.ai.skills import registry
 from teamflow.config import FeishuConfig
-from teamflow.core.enums import ActionResult, ProjectStatus, WorkspaceStatus
+from teamflow.core.enums import ActionResult, FormStatus, InitStep, ProjectStatus, WorkspaceStatus
 from teamflow.execution.messages import send_card_async, send_text_async, update_card_message_async
 from teamflow.orchestration.card_templates import (
     project_create_status_card,
@@ -29,18 +29,25 @@ from teamflow.storage.repository import ActionLogRepo, ProjectFormSubmissionRepo
 logger = logging.getLogger(__name__)
 
 _MAX_PROJECT_NAME_LEN = 80
-_SUBMISSION_STATUS_RUNNING = "running"
-_SUBMISSION_STATUS_SUCCEEDED = "succeeded"
-_SUBMISSION_STATUS_PARTIAL_FAILED = "partial_failed"
-_SUBMISSION_STATUS_FAILED = "failed"
-_STEP_CREATE_CHAT = "创建项目群"
-_STEP_ADD_ADMIN = "添加管理员入群"
-_STEP_GET_CHAT_LINK = "获取群链接"
-_STEP_CREATE_DOC = "创建项目文档"
-_STEP_TRANSFER_DOC_OWNER = "转交文档所有权"
-_STEP_COMPLETE = "完成创建"
-_STEP_WELCOME = "发送欢迎消息"
 
+
+def _try_parse_agent_json(summary: str) -> dict | None:
+    """Try to extract a structured JSON block from the Agent's summary output.
+
+    Returns the parsed dict if found, None otherwise.
+    """
+    import re
+
+    json_match = re.search(r"```json\s*([\s\S]*?)```", summary)
+    if not json_match:
+        return None
+    try:
+        data = json.loads(json_match.group(1).strip())
+        if isinstance(data, dict) and "chat_id" in data:
+            return data
+    except json.JSONDecodeError:
+        logger.debug("Agent JSON 解析失败，回退到 action 遍历")
+    return None
 
 async def _send_text_receipt_async(feishu, project, steps: list[dict]) -> None:
     """Fallback: send a plain-text version of the admin receipt (async)."""
@@ -56,7 +63,6 @@ async def _send_text_receipt_async(feishu, project, steps: list[dict]) -> None:
         logger.info("管理员文本回执发送成功")
     else:
         logger.error("管理员文本回执也发送失败: %s", result.error)
-
 
 class WorkspaceInitFlow:
     """Orchestrates Feishu workspace initialization after a project is created."""
@@ -142,8 +148,8 @@ class WorkspaceInitFlow:
                     session,
                     submission_repo,
                     submission,
-                    status=_SUBMISSION_STATUS_RUNNING,
-                    current_step=_STEP_CREATE_CHAT,
+                    status=FormStatus.running,
+                    current_step=InitStep.create_chat,
                     steps=submission_steps,
                     project_id=project.id,
                 )
@@ -168,8 +174,8 @@ class WorkspaceInitFlow:
                     session,
                     submission_repo,
                     submission,
-                    status=_SUBMISSION_STATUS_RUNNING,
-                    current_step=step.get("name", _STEP_CREATE_CHAT),
+                    status=FormStatus.running,
+                    current_step=step.get("name", InitStep.create_chat),
                     steps=submission_steps,
                     project_id=project.id,
                 )
@@ -197,7 +203,7 @@ class WorkspaceInitFlow:
                 if submission:
                     self._upsert_step(
                         submission_steps,
-                        _STEP_CREATE_CHAT,
+                        InitStep.create_chat,
                         status="running",
                         detail="Agent 通道未完成，正在切换降级通道",
                     )
@@ -205,8 +211,8 @@ class WorkspaceInitFlow:
                         session,
                         submission_repo,
                         submission,
-                        status=_SUBMISSION_STATUS_RUNNING,
-                        current_step=_STEP_CREATE_CHAT,
+                        status=FormStatus.running,
+                        current_step=InitStep.create_chat,
                         steps=submission_steps,
                         project_id=project.id,
                     )
@@ -227,7 +233,7 @@ class WorkspaceInitFlow:
                     logger.exception("降级通道也崩溃")
                     steps.append(
                         {
-                            "name": _STEP_CREATE_CHAT,
+                            "name": InitStep.create_chat,
                             "status": "failure",
                             "detail": "Agent 和降级通道均失败",
                         }
@@ -268,13 +274,13 @@ class WorkspaceInitFlow:
             if submission:
                 self._upsert_step(
                     submission_steps,
-                    _STEP_COMPLETE,
+                    InitStep.complete,
                     status="running",
                     detail="等待欢迎消息发送完成",
                 )
                 self._upsert_step(
                     submission_steps,
-                    _STEP_WELCOME,
+                    InitStep.send_welcome,
                     status="running",
                     detail="正在发送欢迎消息",
                 )
@@ -282,8 +288,8 @@ class WorkspaceInitFlow:
                     session,
                     submission_repo,
                     submission,
-                    status=_SUBMISSION_STATUS_RUNNING,
-                    current_step=_STEP_WELCOME,
+                    status=FormStatus.running,
+                    current_step=InitStep.send_welcome,
                     steps=submission_steps,
                     project_id=project.id,
                 )
@@ -356,40 +362,40 @@ class WorkspaceInitFlow:
             if submission and welcome_step:
                 self._upsert_step(
                     submission_steps,
-                    _STEP_WELCOME,
+                    InitStep.send_welcome,
                     status=welcome_step["status"],
                     detail=welcome_step["detail"],
                 )
-                final_submission_status = _SUBMISSION_STATUS_FAILED
+                final_submission_status = FormStatus.failed
                 final_current_step = "创建未完成"
                 final_detail = "项目创建流程仍有未完成步骤"
 
                 if ws_status == WorkspaceStatus.succeeded and welcome_step["status"] == "success":
-                    final_submission_status = _SUBMISSION_STATUS_SUCCEEDED
-                    final_current_step = _STEP_COMPLETE
+                    final_submission_status = FormStatus.succeeded
+                    final_current_step = InitStep.complete
                     final_detail = "项目创建、工作空间初始化和欢迎消息已全部完成"
                     self._upsert_step(
                         submission_steps,
-                        _STEP_COMPLETE,
+                        InitStep.complete,
                         status="success",
                         detail=final_detail,
                     )
                 else:
                     if ws_status == WorkspaceStatus.partial_failed:
-                        final_submission_status = _SUBMISSION_STATUS_PARTIAL_FAILED
+                        final_submission_status = "partial_failed"
                         final_current_step = "创建部分完成"
                         final_detail = "项目已可用，但仍有部分初始化步骤未完成"
                     elif ws_status == WorkspaceStatus.succeeded:
-                        final_submission_status = _SUBMISSION_STATUS_PARTIAL_FAILED
+                        final_submission_status = "partial_failed"
                         final_current_step = "欢迎消息发送失败"
                         final_detail = welcome_step["detail"]
                     else:
-                        final_submission_status = _SUBMISSION_STATUS_FAILED
+                        final_submission_status = FormStatus.failed
                         final_current_step = "工作空间初始化失败"
                         final_detail = "项目创建未完整完成，请检查失败步骤"
                     self._upsert_step(
                         submission_steps,
-                        _STEP_COMPLETE,
+                        InitStep.complete,
                         status="failure",
                         detail=final_detail,
                     )
@@ -403,7 +409,7 @@ class WorkspaceInitFlow:
                     steps=submission_steps,
                     project_id=project.id,
                     error_message=None
-                    if final_submission_status == _SUBMISSION_STATUS_SUCCEEDED
+                    if final_submission_status == FormStatus.succeeded
                     else final_detail,
                 )
 
@@ -430,7 +436,23 @@ class WorkspaceInitFlow:
         )
         agent_result = await self.agent_executor.execute(task)
 
-        steps: list[dict] = []
+        # First try to parse structured JSON from the agent's summary
+        json_result = _try_parse_agent_json(agent_result.summary)
+        if json_result:
+            steps = json_result.get("steps", [])
+            for step in steps:
+                if on_step:
+                    await on_step(step)
+            return {
+                "steps": steps,
+                "chat_id": json_result.get("chat_id"),
+                "doc_url": json_result.get("doc_url"),
+                "document_id": json_result.get("document_id"),
+                "group_link": json_result.get("group_link"),
+                "agent_success": agent_result.success,
+            }
+
+        # Fallback: parse individual tool actions
         chat_id: str | None = None
         doc_url: str | None = None
         document_id: str | None = None
@@ -458,7 +480,7 @@ class WorkspaceInitFlow:
                     chat_id = result_data.get("chat_id")
                     await record_step(
                         {
-                            "name": _STEP_CREATE_CHAT,
+                            "name": InitStep.create_chat,
                             "status": "success",
                             "detail": f"群ID: {chat_id}",
                         }
@@ -466,7 +488,7 @@ class WorkspaceInitFlow:
                 else:
                     await record_step(
                         {
-                            "name": _STEP_CREATE_CHAT,
+                            "name": InitStep.create_chat,
                             "status": "failure",
                             "detail": error or "未知错误",
                         }
@@ -476,7 +498,7 @@ class WorkspaceInitFlow:
                 if success:
                     await record_step(
                         {
-                            "name": _STEP_ADD_ADMIN,
+                            "name": InitStep.add_admin,
                             "status": "success",
                             "detail": "管理员已加入",
                         }
@@ -484,7 +506,7 @@ class WorkspaceInitFlow:
                 else:
                     await record_step(
                         {
-                            "name": _STEP_ADD_ADMIN,
+                            "name": InitStep.add_admin,
                             "status": "failure",
                             "detail": error or "未知错误",
                         }
@@ -495,7 +517,7 @@ class WorkspaceInitFlow:
                     group_link = result_data.get("share_link")
                     await record_step(
                         {
-                            "name": _STEP_GET_CHAT_LINK,
+                            "name": InitStep.get_chat_link,
                             "status": "success",
                             "detail": group_link or "已获取",
                         }
@@ -503,7 +525,7 @@ class WorkspaceInitFlow:
                 else:
                     await record_step(
                         {
-                            "name": _STEP_GET_CHAT_LINK,
+                            "name": InitStep.get_chat_link,
                             "status": "failure",
                             "detail": error or "无法获取",
                         }
@@ -515,7 +537,7 @@ class WorkspaceInitFlow:
                     document_id = result_data.get("document_id")
                     await record_step(
                         {
-                            "name": _STEP_CREATE_DOC,
+                            "name": InitStep.create_doc,
                             "status": "success",
                             "detail": doc_url or "已创建",
                         }
@@ -523,7 +545,7 @@ class WorkspaceInitFlow:
                 else:
                     await record_step(
                         {
-                            "name": _STEP_CREATE_DOC,
+                            "name": InitStep.create_doc,
                             "status": "failure",
                             "detail": error or "未知错误",
                         }
@@ -588,7 +610,7 @@ class WorkspaceInitFlow:
                 chat_id = result.get("chat_id")
                 await record_step(
                     {
-                        "name": _STEP_CREATE_CHAT,
+                        "name": InitStep.create_chat,
                         "status": "success",
                         "detail": f"群ID: {chat_id}",
                     }
@@ -596,7 +618,7 @@ class WorkspaceInitFlow:
             except Exception as e:
                 logger.exception("创建项目群失败")
                 await record_step(
-                    {"name": _STEP_CREATE_CHAT, "status": "failure", "detail": str(e)}
+                    {"name": InitStep.create_chat, "status": "failure", "detail": str(e)}
                 )
 
         # Step 2: Add admin
@@ -605,7 +627,7 @@ class WorkspaceInitFlow:
                 await _add_members_to_chat(chat_id, [project.admin_open_id])
                 await record_step(
                     {
-                        "name": _STEP_ADD_ADMIN,
+                        "name": InitStep.add_admin,
                         "status": "success",
                         "detail": "管理员已加入",
                     }
@@ -614,7 +636,7 @@ class WorkspaceInitFlow:
                 logger.exception("添加管理员入群失败")
                 await record_step(
                     {
-                        "name": _STEP_ADD_ADMIN,
+                        "name": InitStep.add_admin,
                         "status": "failure",
                         "detail": str(e),
                     }
@@ -627,7 +649,7 @@ class WorkspaceInitFlow:
                 group_link = result.get("share_link")
                 await record_step(
                     {
-                        "name": _STEP_GET_CHAT_LINK,
+                        "name": InitStep.get_chat_link,
                         "status": "success",
                         "detail": group_link or "已获取",
                     }
@@ -636,7 +658,7 @@ class WorkspaceInitFlow:
                 logger.warning("获取群链接失败: %s", e)
                 await record_step(
                     {
-                        "name": _STEP_GET_CHAT_LINK,
+                        "name": InitStep.get_chat_link,
                         "status": "failure",
                         "detail": str(e),
                     }
@@ -650,7 +672,7 @@ class WorkspaceInitFlow:
                 document_id = result.get("document_id")
                 await record_step(
                     {
-                        "name": _STEP_CREATE_DOC,
+                        "name": InitStep.create_doc,
                         "status": "success",
                         "detail": doc_url or "已创建",
                     }
@@ -659,7 +681,7 @@ class WorkspaceInitFlow:
                 logger.exception("创建项目文档失败")
                 await record_step(
                     {
-                        "name": _STEP_CREATE_DOC,
+                        "name": InitStep.create_doc,
                         "status": "failure",
                         "detail": str(e),
                     }
@@ -714,7 +736,7 @@ class WorkspaceInitFlow:
             await _transfer_document_owner(document_id, admin_open_id)
             await report_step(
                 {
-                    "name": _STEP_TRANSFER_DOC_OWNER,
+                    "name": InitStep.transfer_owner,
                     "status": "success",
                     "detail": "文档所有者已转交给项目管理员",
                 }
@@ -724,7 +746,7 @@ class WorkspaceInitFlow:
             logger.warning("转交文档所有者失败: %s", exc)
             await report_step(
                 {
-                    "name": _STEP_TRANSFER_DOC_OWNER,
+                    "name": InitStep.transfer_owner,
                     "status": "failure",
                     "detail": str(exc),
                 }
@@ -781,7 +803,7 @@ class WorkspaceInitFlow:
     ) -> dict | None:
         if not chat_id:
             return {
-                "name": _STEP_WELCOME,
+                "name": InitStep.send_welcome,
                 "status": "skipped",
                 "detail": "项目群不存在，跳过欢迎消息发送",
             }
@@ -800,24 +822,24 @@ class WorkspaceInitFlow:
                 fallback = await send_text_async(self.feishu, txt, chat_id=chat_id)
                 if not fallback.success:
                     return {
-                        "name": _STEP_WELCOME,
+                        "name": InitStep.send_welcome,
                         "status": "failure",
                         "detail": fallback.error or "欢迎消息发送失败",
                     }
                 return {
-                    "name": _STEP_WELCOME,
+                    "name": InitStep.send_welcome,
                     "status": "success",
                     "detail": "卡片发送失败，已降级为文本消息",
                 }
             return {
-                "name": _STEP_WELCOME,
+                "name": InitStep.send_welcome,
                 "status": "success",
                 "detail": "已发送",
             }
         except Exception as exc:
             logger.exception("发送群欢迎消息失败")
             return {
-                "name": _STEP_WELCOME,
+                "name": InitStep.send_welcome,
                 "status": "failure",
                 "detail": str(exc),
             }

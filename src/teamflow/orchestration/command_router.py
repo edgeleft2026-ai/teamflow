@@ -4,12 +4,12 @@ import logging
 
 from teamflow.config import FeishuConfig
 from teamflow.config.settings import GiteaConfig
+from teamflow.core.types import CardActionHandleResult
 from teamflow.execution.messages import send_card
 from teamflow.orchestration.card_templates import project_create_form_card, welcome_card
 from teamflow.orchestration.event_bus import EventBus
 from teamflow.orchestration.project_flow import (
     FLOW_NAME,
-    CardActionHandleResult,
     ProjectCreateFlow,
 )
 from teamflow.storage.database import get_session

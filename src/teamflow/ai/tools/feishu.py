@@ -8,17 +8,19 @@ The lark-oapi SDK is used under the hood; credentials are read from the global
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Global Feishu client — set by main.py at startup.
-feishu_client: Any = None
+_client_lock = threading.Lock()
+_feishu_client: Any = None
+_clients_by_thread: dict[int, Any] = {}
 
 
 def init_feishu_client(app_id: str, app_secret: str, brand: str = "feishu") -> None:
-    """Initialize the global Feishu client. Call once at startup."""
-    global feishu_client
+    """Initialize the Feishu client. Call once at startup."""
+    global _feishu_client
     import lark_oapi as lark
 
     base_url = (
@@ -26,13 +28,44 @@ def init_feishu_client(app_id: str, app_secret: str, brand: str = "feishu") -> N
         if brand == "feishu"
         else "https://open.larksuite.com"
     )
-    feishu_client = lark.Client.builder() \
+    client = lark.Client.builder() \
         .app_id(app_id) \
         .app_secret(app_secret) \
         .domain(base_url) \
         .log_level(lark.LogLevel.INFO) \
         .build()
+    with _client_lock:
+        _feishu_client = client
     logger.info("飞书客户端已初始化 (brand=%s)", brand)
+
+
+def get_client() -> Any:
+    """Return the Feishu client, creating a thread-local copy if needed.
+
+    Threads that call this from a worker context get their own client
+    instance to avoid potential event-loop conflicts with async SDK usage.
+    """
+    with _client_lock:
+        if _feishu_client is None:
+            raise RuntimeError(
+                "Feishu client not initialized. Call init_feishu_client() first."
+            )
+        # In the main thread, return the shared instance directly
+        if threading.current_thread() is threading.main_thread():
+            return _feishu_client
+
+    # Worker threads get a thread-local copy
+    tid = threading.get_ident()
+    with _client_lock:
+        if tid not in _clients_by_thread:
+            import lark_oapi as lark
+            _clients_by_thread[tid] = lark.Client.builder() \
+                .app_id(_feishu_client.app_id) \
+                .app_secret(_feishu_client.app_secret) \
+                .domain(_feishu_client.domain) \
+                .log_level(lark.LogLevel.INFO) \
+                .build()
+        return _clients_by_thread[tid]
 
 
 # ── IM: Chat tools ────────────────────────────────────────────────────────
@@ -50,7 +83,7 @@ async def _create_chat(name: str, description: str = "") -> dict:
     req = lark.im.v1.CreateChatRequest.builder() \
         .request_body(body) \
         .build()
-    resp = feishu_client.im.v1.chat.create(req)
+    resp = get_client().im.v1.chat.create(req)
     if not resp.success():
         raise RuntimeError(f"Create chat failed: {resp.msg} ({resp.code})")
     d = resp.data
@@ -74,7 +107,7 @@ async def _add_members_to_chat(chat_id: str, open_ids: list[str]) -> dict:
         .request_body(body)
         .build()
     )
-    resp = feishu_client.im.v1.chat_members.create(req)
+    resp = get_client().im.v1.chat_members.create(req)
     if not resp.success():
         raise RuntimeError(f"Add members failed: {resp.msg} ({resp.code})")
     return {"chat_id": chat_id, "added_count": len(open_ids)}
@@ -84,7 +117,7 @@ async def _get_chat(chat_id: str) -> dict:
     """Get Feishu group chat info."""
     import lark_oapi as lark
     req = lark.im.v1.GetChatRequest.builder().chat_id(chat_id).build()
-    resp = feishu_client.im.v1.chat.get(req)
+    resp = get_client().im.v1.chat.get(req)
     if not resp.success():
         raise RuntimeError(f"Get chat failed: {resp.msg} ({resp.code})")
     d = resp.data
@@ -97,7 +130,7 @@ async def _get_chat_link(chat_id: str) -> dict:
 
     body = lark.im.v1.LinkChatRequestBody.builder().build()
     req = lark.im.v1.LinkChatRequest.builder().chat_id(chat_id).request_body(body).build()
-    resp = feishu_client.im.v1.chat.link(req)
+    resp = get_client().im.v1.chat.link(req)
     if not resp.success():
         raise RuntimeError(f"Get chat link failed: {resp.msg} ({resp.code})")
     return {"chat_id": chat_id, "share_link": resp.data.share_link}
@@ -132,7 +165,7 @@ async def _send_message(
         .receive_id_type(receive_id_type) \
         .request_body(body) \
         .build()
-    resp = feishu_client.im.v1.message.create(req)
+    resp = get_client().im.v1.message.create(req)
     if not resp.success():
         raise RuntimeError(f"Send message failed: {resp.msg} ({resp.code})")
     return {"message_id": resp.data.message_id, "chat_id": resp.data.chat_id}
@@ -155,7 +188,7 @@ async def _create_document(title: str, content: str = "") -> dict:
     req = lark.docx.v1.CreateDocumentRequest.builder() \
         .request_body(body) \
         .build()
-    resp = feishu_client.docx.v1.document.create(req)
+    resp = get_client().docx.v1.document.create(req)
     if not resp.success():
         raise RuntimeError(f"Create document failed: {resp.msg} ({resp.code})")
     d = resp.data
@@ -173,10 +206,10 @@ async def _add_document_collaborator(document_id: str, open_id: str) -> dict:
     from urllib.request import Request, urlopen
 
     token_req = Request(
-        f"{feishu_client._config.domain}/open-apis/auth/v3/tenant_access_token/internal",
+        f"{get_client()._config.domain}/open-apis/auth/v3/tenant_access_token/internal",
         data=json.dumps({
-            "app_id": feishu_client._config.app_id,
-            "app_secret": feishu_client._config.app_secret,
+            "app_id": get_client()._config.app_id,
+            "app_secret": get_client()._config.app_secret,
         }).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
@@ -192,7 +225,7 @@ async def _add_document_collaborator(document_id: str, open_id: str) -> dict:
         "perm": "full_access",
     }).encode("utf-8")
     url = (
-        f"{feishu_client._config.domain}/open-apis/drive/v1/permissions/"
+        f"{get_client()._config.domain}/open-apis/drive/v1/permissions/"
         f"{document_id}/members?type=docx"
     )
     req = Request(url, data=body, headers={
@@ -223,7 +256,7 @@ async def _transfer_document_owner(document_id: str, open_id: str) -> dict:
         .old_owner_perm("full_access") \
         .request_body(owner) \
         .build()
-    resp = feishu_client.drive.v1.permission_member.transfer_owner(req)
+    resp = get_client().drive.v1.permission_member.transfer_owner(req)
     if not resp.success():
         raise RuntimeError(f"Transfer document owner failed: {resp.msg} ({resp.code})")
     return {"document_id": document_id, "owner_open_id": open_id}
@@ -235,7 +268,7 @@ def _open_domain() -> str:
     open.feishu.cn is the API domain, not the document viewing domain.
     feishu.cn auto-redirects to the correct tenant subdomain.
     """
-    domain = feishu_client._config.domain
+    domain = get_client()._config.domain
     if "larksuite" in domain:
         return "larksuite.com"
     return "feishu.cn"
@@ -250,10 +283,10 @@ async def _get_bot_info() -> dict:
     from urllib.request import Request, urlopen
 
     token_req = Request(
-        f"{feishu_client._config.domain}/open-apis/auth/v3/tenant_access_token/internal",
+        f"{get_client()._config.domain}/open-apis/auth/v3/tenant_access_token/internal",
         data=json.dumps({
-            "app_id": feishu_client._config.app_id,
-            "app_secret": feishu_client._config.app_secret,
+            "app_id": get_client()._config.app_id,
+            "app_secret": get_client()._config.app_secret,
         }).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
@@ -264,7 +297,7 @@ async def _get_bot_info() -> dict:
         raise RuntimeError("Failed to get tenant access token for bot info")
 
     bot_req = Request(
-        f"{feishu_client._config.domain}/open-apis/bot/v3/info",
+        f"{get_client()._config.domain}/open-apis/bot/v3/info",
         headers={
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
@@ -431,7 +464,7 @@ async def _run_lark_cli(command: str, args: list[str]) -> dict:
     from teamflow.execution.cli import find_cli_binary
     from teamflow.execution.cli import run_cli as _run_cli_core
 
-    fconfig = feishu_client._config
+    fconfig = get_client()._config
     feishu_cfg = FeishuConfig(
         app_id=fconfig.app_id,
         app_secret=fconfig.app_secret,

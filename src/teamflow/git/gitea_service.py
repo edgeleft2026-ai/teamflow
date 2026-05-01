@@ -78,9 +78,22 @@ class GiteaService:
             headers={"Authorization": f"token {self._token}"},
             timeout=30.0,
         )
+        self._sync_client: httpx.Client | None = None
+
+    def _get_sync_client(self) -> httpx.Client:
+        if self._sync_client is None:
+            self._sync_client = httpx.Client(
+                base_url=self._base_url,
+                headers={"Authorization": f"token {self._token}"},
+                timeout=30.0,
+            )
+        return self._sync_client
 
     async def close(self) -> None:
         await self._client.aclose()
+        if self._sync_client is not None:
+            self._sync_client.close()
+            self._sync_client = None
 
     @property
     def is_configured(self) -> bool:
@@ -134,6 +147,46 @@ class GiteaService:
         data = r.json()
         logger.info(
             "仓库已创建: %s (org=%s)", data["full_name"], org or "(个人)"
+        )
+        return RepoResult(
+            full_name=data["full_name"],
+            html_url=data["html_url"],
+            clone_url=data["clone_url"],
+            ssh_url=data.get("ssh_url", ""),
+        )
+
+    def create_repo_sync(
+        self,
+        name: str,
+        *,
+        org: str = "",
+        private: bool | None = None,
+        description: str = "",
+        auto_init: bool = True,
+    ) -> RepoResult:
+        """Synchronous version of create_repo for non-async contexts."""
+        import re
+
+        safe_name = re.sub(_REPO_NAME_PATTERN, "-", name).strip("-._")
+        safe_name = safe_name[:_REPO_NAME_MAX_LEN]
+        if not safe_name:
+            raise GiteaServiceError(f"Invalid repo name after sanitization: {name}")
+
+        payload = {
+            "name": safe_name,
+            "private": private if private is not None else self._default_private,
+            "description": description,
+            "auto_init": auto_init,
+        }
+        endpoint = f"/api/v1/org/{org}/repos" if org else "/api/v1/user/repos"
+        r = self._get_sync_client().post(endpoint, json=payload)
+        if r.status_code not in (200, 201):
+            raise GiteaServiceError(
+                f"创建仓库 '{safe_name}' 失败: {r.text}", r.status_code
+            )
+        data = r.json()
+        logger.info(
+            "仓库已创建 (sync): %s (org=%s)", data["full_name"], org or "(个人)"
         )
         return RepoResult(
             full_name=data["full_name"],

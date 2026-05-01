@@ -1,0 +1,1 @@
+{"header":{"event_id":"abc123def456","event_type":"im.message.receive_v1","tenant_key":"1a2b3c","app_id":"cli_test","create_time":"1700000000000"},"event":{"message":{"chat_id":"oc_test123","message_id":"om_test456","message_type":"text","content":"{\"text\":\"开始创建项目\"}"},"sender":{"sender_id":{"open_id":"ou_user123"},"sender_type":"user"}}}

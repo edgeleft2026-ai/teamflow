@@ -8,6 +8,29 @@ from teamflow.execution.cli import CLIResult, run_cli
 
 logger = logging.getLogger(__name__)
 
+_lark_client_cache: dict[str, object] = {}
+
+
+def _get_lark_client(feishu: FeishuConfig):
+    import lark_oapi as lark
+
+    cache_key = feishu.app_id
+    if cache_key not in _lark_client_cache:
+        base_url = (
+            "https://open.feishu.cn"
+            if feishu.brand == "feishu"
+            else "https://open.larksuite.com"
+        )
+        _lark_client_cache[cache_key] = (
+            lark.Client.builder()
+            .app_id(feishu.app_id)
+            .app_secret(feishu.app_secret)
+            .domain(base_url)
+            .log_level(lark.LogLevel.WARNING)
+            .build()
+        )
+    return _lark_client_cache[cache_key]
+
 
 def send_message(
     feishu: FeishuConfig,
@@ -91,17 +114,7 @@ def update_card_message(
     """Update a previously sent interactive card message."""
     import lark_oapi as lark
 
-    base_url = (
-        "https://open.feishu.cn"
-        if feishu.brand == "feishu"
-        else "https://open.larksuite.com"
-    )
-    client = lark.Client.builder() \
-        .app_id(feishu.app_id) \
-        .app_secret(feishu.app_secret) \
-        .domain(base_url) \
-        .log_level(lark.LogLevel.WARNING) \
-        .build()
+    client = _get_lark_client(feishu)
 
     body = lark.im.v1.PatchMessageRequestBody.builder() \
         .content(json.dumps(card, ensure_ascii=False)) \

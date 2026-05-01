@@ -79,6 +79,17 @@ class AccessSyncFlow:
     ) -> None:
         self.feishu = feishu
         self.gitea_config = gitea_config
+        self._gitea_service: GiteaService | None = None
+
+    def _get_gitea(self) -> GiteaService:
+        if self._gitea_service is None:
+            self._gitea_service = GiteaService(self.gitea_config)
+        return self._gitea_service
+
+    async def close(self) -> None:
+        if self._gitea_service:
+            await self._gitea_service.close()
+            self._gitea_service = None
 
     async def on_member_added(self, chat_id: str, open_id: str) -> None:
         try:
@@ -134,11 +145,10 @@ class AccessSyncFlow:
 
             if gitea_username and access_binding.gitea_team_id:
                 try:
-                    gitea = GiteaService(self.gitea_config)
+                    gitea = self._get_gitea()
                     await gitea.add_team_member(
                         access_binding.gitea_team_id, gitea_username
                     )
-                    await gitea.close()
                     logger.info(
                         "已添加 Gitea Team 成员: team=%d user=%s",
                         access_binding.gitea_team_id, gitea_username,
@@ -186,11 +196,10 @@ class AccessSyncFlow:
 
             if gitea_username and access_binding.gitea_team_id:
                 try:
-                    gitea = GiteaService(self.gitea_config)
+                    gitea = self._get_gitea()
                     await gitea.remove_team_member(
                         access_binding.gitea_team_id, gitea_username
                     )
-                    await gitea.close()
                     logger.info(
                         "已移除 Gitea Team 成员: team=%d user=%s",
                         access_binding.gitea_team_id, gitea_username,
@@ -225,9 +234,8 @@ class AccessSyncFlow:
         session,
     ) -> str:
         try:
-            gitea = GiteaService(self.gitea_config)
+            gitea = self._get_gitea()
             user = await gitea.search_user_by_email(email)
-            await gitea.close()
             if user:
                 identity_repo.upsert(
                     open_id,

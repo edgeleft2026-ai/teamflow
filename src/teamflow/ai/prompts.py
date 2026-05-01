@@ -34,9 +34,30 @@ Execute the following steps in order. After each step, check the result before p
 
 - If a step fails, record the failure and continue with the remaining steps.
 - Do not delete or undo any resources that were already created.
-- Report all results (successes and failures) in your final summary.
-- Output the summary in Chinese (Simplified).
-- After you finish, list the key resources created: chat_id, doc_url, share_link (if any).
+- Report all results (successes and failures) in your final summary in Chinese.
+
+## Output Format
+
+After all steps complete, you MUST output a JSON block with the results:
+
+```json
+{{
+  "summary": "Brief summary in Chinese",
+  "chat_id": "oc_xxx from step 1",
+  "doc_url": "https://xxx from step 4",
+  "document_id": "doc_token from step 4",
+  "group_link": "share link from step 3 or empty string",
+  "steps": [
+    {{"name": "Create Chat", "status": "success", "detail": "chat_id: oc_xxx"}},
+    {{"name": "Add Admin", "status": "success", "detail": "added member"}},
+    {{"name": "Get Chat Link", "status": "failure", "detail": "not available"}},
+    {{"name": "Create Document", "status": "success", "detail": "url: https://..."}},
+    {{"name": "Send Welcome", "status": "success", "detail": "sent"}}
+  ]
+}}
+```
+
+Only the JSON block is parsed after completion — make sure it is the LAST thing you output.
 """
 
 

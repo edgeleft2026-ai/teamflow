@@ -12,7 +12,9 @@ dependencies = [
     "apscheduler>=3.10",
     "litellm>=1.0",
     "pydantic>=2.0",
+    "pydantic-settings>=2.0",
     "pyyaml>=6.0",
+    "python-dotenv>=1.0",
     "questionary>=2.1",
     "lark-oapi>=1.4.0",
 ]
@@ -25,6 +27,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+    "alembic>=1.13",
 ]
 
 [project.scripts]
@@ -44,6 +47,7 @@ select = ["E", "F", "I", "N", "UP", "B"]
 "src/teamflow/ai/model_registry.py" = ["E501"]
 "src/teamflow/ai/skills/lark_cli.py" = ["E501"]
 "src/teamflow/setup/cli.py" = ["E501"]
+"src/teamflow/core/result.py" = ["UP046"]
 
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 
 import lark_oapi as lark
 from lark_oapi.event.callback.model.p2_card_action_trigger import (
@@ -13,10 +14,11 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import (
     P2CardActionTriggerResponse,
 )
 
-from teamflow.access.parser import CardActionData
-from teamflow.orchestration.command_router import CommandRouter
+from teamflow.core.types import CardActionData, CardActionHandleResult
 
 logger = logging.getLogger(__name__)
+
+CardActionHandler = Callable[[CardActionData], CardActionHandleResult]
 
 
 def _build_card_action_data(data: P2CardActionTrigger) -> CardActionData | None:
@@ -49,9 +51,16 @@ def start_callback_client(
     app_id: str,
     app_secret: str,
     brand: str,
-    router: CommandRouter,
+    handle_card_action: CardActionHandler,
 ) -> lark.ws.Client:
     """Create and return a lark-oapi WebSocket client for card callbacks.
+
+    Args:
+        app_id: Feishu app ID.
+        app_secret: Feishu app secret.
+        brand: "feishu" or "lark".
+        handle_card_action: Callback that receives CardActionData and returns
+            CardActionHandleResult (toast type/text and optional replacement card).
 
     The caller should run `client.start()` in a daemon thread.
     """
@@ -67,9 +76,9 @@ def start_callback_client(
             card_data.chat_id, card_data.open_id, card_data.action_tag,
         )
 
-        result = None
+        result = CardActionHandleResult()
         try:
-            result = router.handle_card_action(card_data)
+            result = handle_card_action(card_data)
         except Exception:
             logger.exception("卡片回调处理异常")
 
@@ -105,16 +114,39 @@ def start_callback_thread(
     app_id: str,
     app_secret: str,
     brand: str,
-    router: CommandRouter,
+    handle_card_action: CardActionHandler,
 ) -> lark.ws.Client:
-    """Start the callback WebSocket client in a daemon thread."""
-    client = start_callback_client(app_id, app_secret, brand, router)
+    """Start the callback WebSocket client in a daemon thread.
 
-    def _run():
-        logger.info("卡片回调 WebSocket 客户端启动中...")
-        client.start()
+    Args:
+        app_id: Feishu app ID.
+        app_secret: Feishu app secret.
+        brand: "feishu" or "lark".
+        handle_card_action: Card action handler callback.
+    """
+    client = start_callback_client(app_id, app_secret, brand, handle_card_action)
 
-    thread = threading.Thread(target=_run, daemon=True, name="card-callback")
+    def _run_with_reconnect():
+        max_retries = 10
+        for attempt in range(max_retries):
+            try:
+                logger.info("卡片回调 WebSocket 客户端启动中...")
+                client.start()
+            except Exception:
+                if attempt >= max_retries - 1:
+                    logger.exception("WebSocket 重连次数耗尽，卡片回调已停止")
+                    return
+                delay = min(2 ** attempt, 60)
+                logger.warning(
+                    "WebSocket 断开，%ds 后重连 (attempt %d/%d)",
+                    delay, attempt + 1, max_retries,
+                )
+                import time
+                time.sleep(delay)
+
+    thread = threading.Thread(
+        target=_run_with_reconnect, daemon=True, name="card-callback"
+    )
     thread.start()
     logger.info("卡片回调线程已启动")
 

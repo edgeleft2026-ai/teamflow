@@ -31,6 +31,11 @@ ruff format src/                # 代码格式化
 ```
 Python 主进程
 ├── 接入层 (access/) — 消费 lark-cli 事件订阅的 NDJSON 输出、指令解析、消息路由、卡片回调
+│   ├── parser.py — NDJSON 事件解析（FeishuEvent/CardActionData/ChatMemberEventData）
+│   ├── dispatcher.py — 事件分发 + event_id 去重
+│   ├── watcher.py — 文件系统轮询监听事件输出
+│   ├── callback.py — lark-oapi WebSocket 卡片回调客户端
+│   └── feishu_contact.py — 飞书通讯录服务（用户查询/卡片发送）
 ├── 编排层 (orchestration/) — 状态机、事件分发、流程编排（不直接调用飞书 API）
 ├── AI 层 (ai/) — LiteLLM tool-use 循环、ToolProvider、Skills、模型路由
 │
@@ -61,17 +66,18 @@ Python 主进程
 
 ### 数据层 (`storage/`)
 
-SQLite（路径 `data/teamflow.db` 或 `TEAMFLOW_DB_PATH` 环境变量）+ SQLModel。核心表：`Project`、`ConversationState`、`EventLog`、`ActionLog`、`ProjectFormSubmission`、`UserIdentityBinding`、`ProjectAccessBinding`、`ProjectMember`（全部 UUID 主键、UTC 时间戳），各有对应 Repository。
+SQLite（路径 `data/teamflow.db` 或 `TEAMFLOW_DB_PATH` 环境变量）+ SQLModel。核心表：`Project`、`ConversationState`、`EventLog`、`ActionLog`、`ProjectFormSubmission`、`UserIdentityBinding`、`ProjectAccessBinding`、`ProjectMember`（全部 UUID 主键、UTC 时间戳），对应 Repository 在 `storage/repository.py`（单数）。
 
 ### 配置 (`config/`)
 
-Pydantic 模型 + YAML 加载（`config.yaml`）。支持四大配置段：
-- `FeishuConfig`（app_id/secret/brand/admin_open_id）
+Pydantic 模型 + YAML 加载（`config.yaml`）+ 环境变量覆盖（`.env` 文件自动加载）。支持四大配置段：
+- `FeishuConfig`（app_id/secret/brand/admin_open_id）— 敏感字段通过 `FEISHU_APP_ID`/`FEISHU_APP_SECRET` 等环境变量注入
 - `AgentConfig`（provider/api_mode/模型/工具集/max_iterations/超时）
-- `GiteaConfig`（base_url/access_token/default_private/auto_create/org_name）
+- `GiteaConfig`（base_url/access_token/default_private/auto_create/org_name）— access_token 通过 `GITEA_ACCESS_TOKEN` 环境变量注入
 - `LoggingConfig`（level/log_dir/file_enabled/json_format/color/module_levels）
 
-支持环境变量覆盖（`TEAMFLOW_FAST_MODEL`、`TEAMFLOW_CONFIG_PATH` 等）。
+配置优先级：环境变量 > YAML 文件 > 模型默认值。`.env.example` 为模板文件，复制为 `.env` 后填入凭据。
+敏感字段（app_secret、access_token、API keys）必须在 `.env` 中配置，不可写入 `config.yaml`。
 
 ### Agent 模型路由 (`ai/models.py`)
 
@@ -140,10 +146,12 @@ Feishu Group Member
 
 - 幂等：飞书事件用 `event_id` 去重，业务事件用 `idempotency_key`，外部资源创建前先检查已有绑定
 - 脱敏：App Secret、访问令牌、模型 API Key 不得写入日志或业务表（日志系统内置 SensitiveFilter 自动脱敏）
+- **密钥管理**：敏感凭据（app_secret、access_token、API keys）必须通过 `.env` 文件或环境变量配置，严禁写入 `config.yaml` 或提交到仓库。参见 `.env.example` 模板。
 - 单步失败隔离：部分步骤失败不遮蔽已成功结果，不回滚已创建的外部资源
 - 定时调度幂等：以项目 ID + 日期/周编号作为幂等维度
 - 事件订阅进程 `lark-cli event +subscribe` 为长驻子进程，main.py 监控存活
 - 卡片回调通过 `lark-oapi` SDK 的 WebSocket 在独立 daemon 线程中接收
+- SQLite 启用 WAL 模式 + busy_timeout(5000ms) + check_same_thread=False 以支持多线程并发
 
 ## 参考子目录
 

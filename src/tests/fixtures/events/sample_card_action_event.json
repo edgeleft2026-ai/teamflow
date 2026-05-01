@@ -1,0 +1,26 @@
+{
+  "header": {
+    "event_id": "card_action_001",
+    "event_type": "card.action.trigger",
+    "app_id": "cli_test",
+    "create_time": "1700000000000"
+  },
+  "event": {
+    "action": {
+      "tag": "submit_project_form",
+      "value": {"request_id": "req_001"},
+      "form_value": {
+        "project_name": "My Test Project",
+        "git_repo_path": "https://git.example.com/org/repo.git"
+      }
+    },
+    "operator": {
+      "open_id": "ou_user123"
+    },
+    "context": {
+      "open_chat_id": "oc_test123",
+      "open_message_id": "om_card001"
+    },
+    "token": "card_token_001"
+  }
+}

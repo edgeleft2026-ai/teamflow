@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 
 import litellm
 
@@ -188,7 +189,7 @@ class AgentExecutor:
                     }
 
                 response = await asyncio.wait_for(
-                    litellm.acompletion(**litellm_kwargs),
+                    _call_with_retry(litellm.acompletion, **litellm_kwargs),
                     timeout=self._timeout,
                 )
 
@@ -350,3 +351,28 @@ def _format_user_message(task: AgentTask) -> str:
         ctx_str = json.dumps(task.context, ensure_ascii=False, indent=2)
         parts.append(f"\nContext:\n{ctx_str}")
     return "\n".join(parts)
+
+
+async def _call_with_retry(
+    fn,
+    *args,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    **kwargs,
+):
+    """Call an async function with exponential backoff retry on transient errors."""
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as e:
+            last_exc = e
+            if attempt >= max_retries:
+                break
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            logger.warning(
+                "LiteLLM 调用失败 (attempt %d/%d): %s, %.1fs 后重试",
+                attempt + 1, max_retries + 1, e, delay,
+            )
+            await asyncio.sleep(delay)
+    raise last_exc

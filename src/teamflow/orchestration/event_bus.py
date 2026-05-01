@@ -28,6 +28,18 @@ class EventBus:
     def subscribe_global(cls, event_type: str, handler: EventHandler) -> None:
         cls._global_handlers.setdefault(event_type, []).append(handler)
 
+    @classmethod
+    def unsubscribe_global(cls, event_type: str, handler: EventHandler | None = None) -> None:
+        """Remove global handler(s). If handler is None, remove all for event_type."""
+        if event_type not in cls._global_handlers:
+            return
+        if handler is None:
+            cls._global_handlers.pop(event_type, None)
+        else:
+            handlers = cls._global_handlers.get(event_type, [])
+            if handler in handlers:
+                handlers.remove(handler)
+
     def publish(
         self,
         event_type: str,

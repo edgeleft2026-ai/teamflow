@@ -47,7 +47,6 @@ class EventDispatcher:
         self._dedup_path = dedup_path or _DEFAULT_DEDUP_PATH
         self._dedup_lock = Lock()
         self._flush_counter = 0
-        self._pending_shard: dict[str, str] = {}  # chat_id → partial text
         self._load_seen_ids()
 
     def on(self, event_type: str, handler: EventHandler) -> None:

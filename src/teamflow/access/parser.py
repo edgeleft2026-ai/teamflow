@@ -2,33 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
 from pathlib import Path
 
+from teamflow.core.types import CardActionData, ChatMemberEventData, FeishuEvent
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class FeishuEvent:
-    """Parsed Feishu event from lark-cli NDJSON output."""
-
-    event_id: str
-    event_type: str
-    body: dict
-    raw: dict = field(default_factory=dict, repr=False)
-
-
-@dataclass
-class CardActionData:
-    """Parsed data from a card.action.trigger event."""
-
-    open_id: str
-    chat_id: str
-    open_message_id: str
-    action_tag: str
-    action_value: dict
-    form_values: dict
-    token: str
 
 
 def parse_ndjson_line(line: str) -> FeishuEvent | None:
@@ -177,12 +155,6 @@ def extract_card_action_data(event: FeishuEvent) -> CardActionData | None:
         form_values=form_values if isinstance(form_values, dict) else {},
         token=token,
     )
-
-
-@dataclass
-class ChatMemberEventData:
-    chat_id: str
-    open_ids: list[str]
 
 
 def extract_chat_member_data(event: FeishuEvent) -> ChatMemberEventData | None:

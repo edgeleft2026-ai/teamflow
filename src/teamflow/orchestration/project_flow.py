@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import threading
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session
 
-from teamflow.access.parser import CardActionData
 from teamflow.config import FeishuConfig
 from teamflow.config.settings import GiteaConfig
-from teamflow.core.enums import ActionResult, ProjectStatus
+from teamflow.core.enums import ActionResult, FlowState, FormStatus, InitStep, ProjectStatus
+from teamflow.core.types import CardActionData, CardActionHandleResult
 from teamflow.execution.messages import send_card, send_text, update_card_message
 from teamflow.git.gitea_service import GiteaService
 from teamflow.orchestration.card_templates import (
@@ -35,47 +33,28 @@ logger = logging.getLogger(__name__)
 FLOW_NAME = "create_project"
 EXPIRE_HOURS = 1
 
-STATE_COLLECTING_NAME = "collecting_project_name"
-STATE_COLLECTING_REPO = "collecting_repo"
-STATE_CREATING = "creating_project"
-STATE_CREATED = "created"
-STATE_FAILED = "failed"
-
-FORM_STATUS_RUNNING = "running"
-FORM_STATUS_SUCCEEDED = "succeeded"
-FORM_STATUS_FAILED = "failed"
-
-STEP_SUBMITTED = "表单已提交"
-STEP_CREATE_RECORD = "创建项目记录"
-STEP_CREATE_REPO = "创建代码仓库"
-STEP_PUBLISH_EVENT = "发布项目事件"
-STEP_CREATE_CHAT = "创建项目群"
-STEP_ADD_ADMIN = "添加管理员入群"
-STEP_GET_CHAT_LINK = "获取群链接"
-STEP_CREATE_DOC = "创建项目文档"
-STEP_TRANSFER_DOC_OWNER = "转交文档所有权"
-STEP_SEND_WELCOME = "发送欢迎消息"
-STEP_COMPLETE = "完成创建"
-
 _HELP_TEXT = '当前正在创建项目。\n• 输入项目名称或仓库信息继续\n• 发送"取消"退出创建流程'
 
 _START_TRIGGERS = {"取消", "exit", "cancel", "退出"}
 
 
-@dataclass
-class CardActionHandleResult:
-    toast_type: str = "info"
-    toast_text: str = ""
-    card: dict | None = None
-
-
 class ProjectCreateFlow:
+    """Orchestrates the project creation flow (text + form submission).
+
+    Session lifecycle:
+    - For inline use (CommandRouter), pass ``session`` directly from a ``with get_session()``
+      block. This ensures the flow's repos use the same transactional session.
+    - For background worker threads, pass ``session_factory`` (the ``get_session`` callable)
+      so each thread opens its own session via ``with session_factory() as session:``.
+    """
+
     def __init__(
         self,
         feishu: FeishuConfig,
         session: Session,
         event_bus: EventBus,
         gitea_config: GiteaConfig | None = None,
+        session_factory=None,
     ) -> None:
         self.feishu = feishu
         self.session = session
@@ -85,6 +64,7 @@ class ProjectCreateFlow:
         self.submission_repo = ProjectFormSubmissionRepo(session)
         self.event_bus = event_bus
         self.gitea_config = gitea_config or GiteaConfig()
+        self._session_factory = session_factory
 
     def start(self, open_id: str, chat_id: str) -> None:
         """开始创建项目流程。"""
@@ -95,7 +75,7 @@ class ProjectCreateFlow:
             open_id=open_id,
             chat_id=chat_id,
             flow=FLOW_NAME,
-            state=STATE_COLLECTING_NAME,
+            state=FlowState.collecting_name,
             payload={},
             expires_at=expires_at,
         )
@@ -124,11 +104,11 @@ class ProjectCreateFlow:
             )
             return
 
-        if state == STATE_COLLECTING_NAME:
+        if state == FlowState.collecting_name:
             self._handle_collect_name(text, open_id, chat_id, conv)
-        elif state == STATE_COLLECTING_REPO:
+        elif state == FlowState.collecting_repo:
             self._handle_collect_repo(text, open_id, chat_id, conv)
-        elif state == STATE_CREATING:
+        elif state == FlowState.creating:
             send_text(self.feishu, "项目正在创建中，请稍候...", chat_id=chat_id)
         else:
             logger.warning("未预期的会话状态: %s", state)
@@ -164,8 +144,8 @@ class ProjectCreateFlow:
             open_message_id=card_data.open_message_id,
             project_name=project_name,
             git_repo_path=git_repo_path,
-            status=FORM_STATUS_RUNNING,
-            current_step=STEP_CREATE_RECORD,
+            status=FormStatus.running,
+            current_step=InitStep.create_record,
             steps=steps,
         )
         self.session.commit()
@@ -200,7 +180,7 @@ class ProjectCreateFlow:
             open_id=open_id,
             chat_id=chat_id,
             flow=FLOW_NAME,
-            state=STATE_COLLECTING_REPO,
+            state=FlowState.collecting_repo,
             payload=payload,
             expires_at=expires_at,
         )
@@ -228,7 +208,7 @@ class ProjectCreateFlow:
             open_id=open_id,
             chat_id=chat_id,
             flow=FLOW_NAME,
-            state=STATE_CREATING,
+            state=FlowState.creating,
             payload=payload,
             expires_at=expires_at,
         )
@@ -299,11 +279,11 @@ class ProjectCreateFlow:
         """自动在 Gitea 创建仓库，返回 clone_url。失败时返回 None。"""
         try:
             gitea = GiteaService(self.gitea_config)
-            result = asyncio.run(gitea.create_repo(
+            result = gitea.create_repo_sync(
                 project.name,
                 org=self.gitea_config.org_name,
                 description=f"Auto-created by TeamFlow for project: {project.name}",
-            ))
+            )
             self.project_repo.update_workspace(
                 project.id,
                 git_repo_path=result.clone_url,
@@ -328,7 +308,10 @@ class ProjectCreateFlow:
 
     def _run_submission_worker(self, request_id: str) -> None:
         with get_session() as session:
-            flow = ProjectCreateFlow(self.feishu, session, EventBus(session), self.gitea_config)
+            flow = ProjectCreateFlow(
+                self.feishu, session, EventBus(session),
+                self.gitea_config, session_factory=get_session,
+            )
             flow._process_submission(request_id)
 
     def _process_submission(self, request_id: str) -> None:
@@ -338,20 +321,20 @@ class ProjectCreateFlow:
             return
 
         steps = self._load_submission_steps(submission)
-        current_step = STEP_CREATE_RECORD
+        current_step = InitStep.create_record
         project = None
 
         try:
             self._mark_step(
                 steps,
-                STEP_CREATE_RECORD,
+                InitStep.create_record,
                 status="running",
                 detail="正在写入项目记录",
             )
             self._persist_submission_progress(
                 submission,
-                status=FORM_STATUS_RUNNING,
-                current_step=STEP_CREATE_RECORD,
+                status=FormStatus.running,
+                current_step=InitStep.create_record,
                 steps=steps,
             )
 
@@ -363,30 +346,30 @@ class ProjectCreateFlow:
             self.project_repo.update_status(project.id, ProjectStatus.created)
             self._mark_step(
                 steps,
-                STEP_CREATE_RECORD,
+                InitStep.create_record,
                 status="success",
                 detail=f"项目记录已创建，ID: {project.id[:8]}",
             )
             self._persist_submission_progress(
                 submission,
-                status=FORM_STATUS_RUNNING,
-                current_step=STEP_CREATE_REPO,
+                status=FormStatus.running,
+                current_step=InitStep.create_repo,
                 steps=steps,
                 project_id=project.id,
             )
 
-            current_step = STEP_CREATE_REPO
+            current_step = InitStep.create_repo
             if not submission.git_repo_path and self.gitea_config.auto_create:
                 self._mark_step(
                     steps,
-                    STEP_CREATE_REPO,
+                    InitStep.create_repo,
                     status="running",
                     detail="正在 Gitea 创建代码仓库",
                 )
                 self._persist_submission_progress(
                     submission,
-                    status=FORM_STATUS_RUNNING,
-                    current_step=STEP_CREATE_REPO,
+                    status=FormStatus.running,
+                    current_step=InitStep.create_repo,
                     steps=steps,
                     project_id=project.id,
                 )
@@ -396,51 +379,51 @@ class ProjectCreateFlow:
                     submission.git_repo_path = repo_url
                     self._mark_step(
                         steps,
-                        STEP_CREATE_REPO,
+                        InitStep.create_repo,
                         status="success",
                         detail=f"仓库已创建: {repo_url}",
                     )
                 else:
                     self._mark_step(
                         steps,
-                        STEP_CREATE_REPO,
+                        InitStep.create_repo,
                         status="failure",
                         detail="自动创建仓库失败，可后续手动关联",
                     )
             elif submission.git_repo_path:
                 self._mark_step(
                     steps,
-                    STEP_CREATE_REPO,
+                    InitStep.create_repo,
                     status="skipped",
                     detail=f"使用已有仓库: {submission.git_repo_path}",
                 )
             else:
                 self._mark_step(
                     steps,
-                    STEP_CREATE_REPO,
+                    InitStep.create_repo,
                     status="skipped",
                     detail="未配置 Gitea，跳过自动创建",
                 )
 
             self._persist_submission_progress(
                 submission,
-                status=FORM_STATUS_RUNNING,
-                current_step=STEP_PUBLISH_EVENT,
+                status=FormStatus.running,
+                current_step=InitStep.publish_event,
                 steps=steps,
                 project_id=project.id,
             )
 
-            current_step = STEP_PUBLISH_EVENT
+            current_step = InitStep.publish_event
             self._mark_step(
                 steps,
-                STEP_PUBLISH_EVENT,
+                InitStep.publish_event,
                 status="running",
                 detail="正在通知下游初始化工作空间",
             )
             self._persist_submission_progress(
                 submission,
-                status=FORM_STATUS_RUNNING,
-                current_step=STEP_PUBLISH_EVENT,
+                status=FormStatus.running,
+                current_step=InitStep.publish_event,
                 steps=steps,
                 project_id=project.id,
             )
@@ -457,13 +440,13 @@ class ProjectCreateFlow:
             )
             self._mark_step(
                 steps,
-                STEP_PUBLISH_EVENT,
+                InitStep.publish_event,
                 status="success",
                 detail="创建事件已发布",
             )
             self._mark_step(
                 steps,
-                STEP_CREATE_CHAT,
+                InitStep.create_chat,
                 status="pending",
                 detail="等待开始",
             )
@@ -481,8 +464,8 @@ class ProjectCreateFlow:
             )
             self._persist_submission_progress(
                 submission,
-                status=FORM_STATUS_RUNNING,
-                current_step=STEP_CREATE_CHAT,
+                status=FormStatus.running,
+                current_step=InitStep.create_chat,
                 steps=steps,
                 project_id=project.id,
             )
@@ -514,7 +497,7 @@ class ProjectCreateFlow:
             )
             self._persist_submission_progress(
                 submission,
-                status=FORM_STATUS_FAILED,
+                status=FormStatus.failed,
                 current_step=current_step,
                 steps=steps,
                 project_id=project.id if project else None,
@@ -572,17 +555,17 @@ class ProjectCreateFlow:
 
     def _build_initial_steps(self) -> list[dict]:
         return [
-            {"name": STEP_SUBMITTED, "status": "success", "detail": "表单内容已锁定"},
-            {"name": STEP_CREATE_RECORD, "status": "running", "detail": "等待开始"},
-            {"name": STEP_CREATE_REPO, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_PUBLISH_EVENT, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_CREATE_CHAT, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_ADD_ADMIN, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_GET_CHAT_LINK, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_CREATE_DOC, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_TRANSFER_DOC_OWNER, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_SEND_WELCOME, "status": "pending", "detail": "等待开始"},
-            {"name": STEP_COMPLETE, "status": "pending", "detail": "等待所有步骤完成"},
+            {"name": InitStep.submitted, "status": "success", "detail": "表单内容已锁定"},
+            {"name": InitStep.create_record, "status": "running", "detail": "等待开始"},
+            {"name": InitStep.create_repo, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.publish_event, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.create_chat, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.add_admin, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.get_chat_link, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.create_doc, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.transfer_owner, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.send_welcome, "status": "pending", "detail": "等待开始"},
+            {"name": InitStep.complete, "status": "pending", "detail": "等待所有步骤完成"},
         ]
 
     def _load_submission_steps(self, submission: ProjectFormSubmission) -> list[dict]:

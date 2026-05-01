@@ -1,0 +1,14 @@
+{
+  "header": {
+    "event_id": "member_added_001",
+    "event_type": "im.chat.member.user.added_v1",
+    "app_id": "cli_test",
+    "create_time": "1700000000000"
+  },
+  "event": {
+    "chat_id": "oc_test123",
+    "users": [
+      {"open_id": "ou_newmember_1"}
+    ]
+  }
+}
